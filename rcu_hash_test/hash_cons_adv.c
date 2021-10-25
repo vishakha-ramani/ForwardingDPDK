@@ -157,11 +157,9 @@ int reader_thread(void *args) {
         rte_rcu_qsbr_quiescent(qv, reader_id);
 
         rte_rcu_qsbr_lock(qv, reader_id);
-
-        // have a local pointer point to the value, should use atomic
-        pos = rte_hash_lookup(handle, (void*)&key);
-        printf("Position to be looked up %d\n", pos);
-        value_pointer = __atomic_load_n(shared_pointer+pos, __ATOMIC_SEQ_CST);
+        value_pointer = rte_malloc("Read pointer", sizeof(int), RTE_CACHE_LINE_SIZE);
+        pos = rte_hash_lookup_data(handle, &key, &value_pointer);
+        READER_DEBUG(reader_id, "Looking up for key %d found at position %d", key, pos);
         
         // no need to use atomic when accessing *value_pointer, since the object will never be updated
         READER_DEBUG(reader_id, "(%zd) Read %us, val=%d(%p) for key %d", i, d, *value_pointer, value_pointer, key);
@@ -206,29 +204,16 @@ void writer_thread(writer_args_t *args) {
         // prepare write, no need to be atomic
         next_val = rte_malloc("Next Value", sizeof(int), RTE_CACHE_LINE_SIZE);
         memcpy(next_val, &i, sizeof(int));
-        WRITER_DEBUG("New value = %d(%p)", *next_val, next_val);
+        WRITER_DEBUG("(%zd) New value = %d(%p)", i,  *next_val, next_val);
 
         key = 100 + i;
         d = writer.actions[i].duration;
         WRITER_DEBUG("(%zd) Write %us", i, d);
         pos = rte_hash_lookup(handle, (void*)&key);
-        printf("Position to be exchanged %d\n", pos);
+        WRITER_DEBUG("Updating for key %d found at %d with value %d", key, pos, *next_val);
         rte_delay_ms(d * 1000); //describes write time
-
-        // exchange pointer (publish value), should use atomic
-        WRITER_DEBUG("before exchange: shared_value=%d(%p), next_val=%d(%p) for key %d",
-                     *shared_pointer[pos], shared_pointer[pos], *next_val, next_val, key);
-        
-        //next_val = __atomic_exchange_n(shared_pointer+pos, next_val, __ATOMIC_SEQ_CST);
         retval = rte_hash_add_key_data(handle, (void*)&key, (void*)next_val);
-        WRITER_DEBUG(" after exchange: shared_value=%d(%p), next_val=%d(%p) for key %d",
-                     *shared_pointer[pos], shared_pointer[pos], *next_val, next_val, key);
         WRITER_DEBUG("(%zd) Write %us end", i, d);
-
-//        // free value
-//        rte_rcu_qsbr_synchronize(qv, RTE_QSBR_THRID_INVALID);
-//        WRITER_DEBUG("(%zd) Free %d(%p)", i, *next_val, next_val);
-//        rte_free(next_val);
     }
 }
 
@@ -311,7 +296,7 @@ int main(int argc, char *argv[]) {
 //    rte_free(shared_pointer);
 //    rte_free(&writer_args);
     
-//    printf("duration=%.1f\n", (double) (rte_get_tsc_cycles() - rte_start) / (double) rte_get_tsc_hz());
+    printf("duration=%.1f\n", (double) (rte_get_tsc_cycles() - rte_start) / (double) rte_get_tsc_hz());
     
     return 0;
 }
