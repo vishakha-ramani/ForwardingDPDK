@@ -2,10 +2,10 @@
 # Copyright(c) 2010-2014 Intel Corporation
 
 # binary name
-APP = rcu_hash_uncons_mempool
+APP = rcu_hash_uncons_mempool_test_1
 
 # all source are stored in SRCS-y
-SRCS-y := rcu_hash_uncons_mempool.c
+SRCS-y := rcu_hash_uncons_mempool_test_1.c
 
 PKGCONF ?= pkg-config
 

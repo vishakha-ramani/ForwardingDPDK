@@ -32,6 +32,7 @@ rte_hash_free_key_data free_func(void *p, void *key_data)
 {
     void *key_ptr = p;
     int *data = key_data;
+    //printf("Freeing %d(%p) from mempool\n", *data, data);
     WRITER_DEBUG("Freeing %d(%p) from mempool", *data, data);
     rte_mempool_put(value_pool, key_data);
 }
@@ -39,6 +40,7 @@ rte_hash_free_key_data free_func(void *p, void *key_data)
 /* create a hash table with the given number of entries*/
 static struct rte_hash *
 create_hash_table(uint16_t num_entries)
+//create_hash_table(uint16_t num_entries, struct rte_rcu_qsbr_dq* dq)
 {
     struct rte_hash *handle = NULL;
     struct rte_hash_parameters params = {
@@ -100,31 +102,34 @@ typedef struct {
 } writer_args_t;
 
 action_list_t writer = {
-        3,
+        4,
         {
-                {1, 1},
-                {1, 1},
+                {1, 2},
+                {3, 1},
+                {3, 1},
                 {1, 1},
         }
 };
 
 
 action_list_t reader1 = {
-        2,
+        3,
         {
-                {1, 3},
+                {1, 1},
+                {2, 1},
                 {3, 4},
         }
 };
 action_list_t reader2 = {
         2,
         {
-                {3, 5},
-                {1, 3},
+                {3, 2},
+                {1, 2},
         }
 };
 
-action_list_t *readers[] = {&reader1, &reader2};
+//action_list_t *readers[] = {&reader1, &reader2};
+action_list_t *readers[] = {&reader1};
 
 int reader_thread(void *args) {
     size_t i, reader_id, read_count;
@@ -151,7 +156,7 @@ int reader_thread(void *args) {
     rte_delay_ms(1000);
 
     for (i = 0; i < read_count; i++) {
-        key = 100 + i; // number of keys looked up will be equal to read_count starting from 100
+        key = 100; // number of keys looked up will be equal to read_count starting from 100
         // delay
         d = reader->actions[i].delay;
         READER_DEBUG(reader_id, "(%zd) Delay %us", i, d);
@@ -165,17 +170,12 @@ int reader_thread(void *args) {
         rte_rcu_qsbr_lock(qv, reader_id);
         value_pointer = rte_malloc("Read pointer", sizeof(int), RTE_CACHE_LINE_SIZE);
         pos = rte_hash_lookup_data(handle, &key, &value_pointer);
-        READER_DEBUG(reader_id, "Looking up for key %d found at position %d", key, pos);
+        //READER_DEBUG(reader_id, "Looking up for key %d found at position %d", key, pos);
         
         // no need to use atomic when accessing *value_pointer, since the object will never be updated
         READER_DEBUG(reader_id, "(%zd) Read %us, val=%d(%p) for key %d", i, d, *value_pointer, value_pointer, key);
         rte_delay_ms(d * 1000);
         READER_DEBUG(reader_id, "(%zd) Read %us end", i, d);
-        // shared_pointer_copy for debug purpose, will not read shared_pointer at this stage when in real application
-//        shared_pointer_copy = __atomic_load_n(shared_pointer+pos, __ATOMIC_SEQ_CST);
-//        // however, application can still access *value_pointer (the object local pointer pointed to) at this stage
-//        READER_DEBUG(reader_id, "(%zd) Read %us end, val=%d(%p), shared=%d(%p) for key %d", i, d, *value_pointer, value_pointer, *shared_pointer_copy, shared_pointer_copy, key);
-
         rte_rcu_qsbr_unlock(qv, reader_id);
         rte_rcu_qsbr_quiescent(qv, reader_id);
     }
@@ -213,11 +213,11 @@ void writer_thread(writer_args_t *args) {
         memcpy(next_val, &i, sizeof(int));
         WRITER_DEBUG("(%zd) New value = %d(%p)", i,  *next_val, next_val);
 
-        key = 100 + i;
+        key = 100;
         d = writer.actions[i].duration;
-        WRITER_DEBUG("(%zd) Write %us", i, d);
+        WRITER_DEBUG("(%zd) Write %us for key %d with value %d", i, d, key, *next_val );
         pos = rte_hash_lookup(handle, (void*)&key);
-        WRITER_DEBUG("Updating for key %d found at %d with value %d", key, pos, *next_val);
+        //WRITER_DEBUG("Updating for key %d found at %d with value %d", key, pos, *next_val);
         rte_delay_ms(d * 1000); //describes write time
         retval = rte_hash_add_key_data(handle, (void*)&key, (void*)next_val);
         WRITER_DEBUG("(%zd) Write %us end", i, d);
@@ -231,6 +231,8 @@ int main(int argc, char *argv[]) {
     reader_args_t *reader_args;
     struct rte_rcu_qsbr *qv;
     struct rte_hash_rcu_config rcu_cfg = {0};
+//    struct rte_rcu_qsbr_dq_parameters params;
+//    struct rte_rcu_qsbr_dq *dq;
 
     ret = rte_eal_init(argc, argv);
     printf("rte_eal_init returned %d\n", ret);
@@ -265,17 +267,34 @@ int main(int argc, char *argv[]) {
     ret = rte_rcu_qsbr_init(qv, num_readers);
     if (ret) rte_exit(EXIT_FAILURE, "Cannot perform qsbr init");
     
+        
+//    /* Create a queue with simple parameters */
+//    memset(&params, 0, sizeof(struct rte_rcu_qsbr_dq_parameters));
+//    //snprintf(rcu_dq_name, sizeof(rcu_dq_name), "TEST_RCU");
+//    params.name = "rcu_dq";
+//    params.free_fn = free_func;
+//    params.v = qv;
+//    params.size = HASH_ENTRIES;
+//    params.esize = 64;
+//    params.trigger_reclaim_limit = 0;
+//    params.max_reclaim_size = params.size;
+//    dq = rte_rcu_qsbr_dq_create(&params);
+    
     /* Create and populate shared data structure i.e. hash table*/
     printf("Creating hash table. \n");
     struct rte_hash * handle;
     handle = create_hash_table(HASH_ENTRIES);
+    //handle = create_hash_table(HASH_ENTRIES, dq);
+    
     
     /* Add RCU QSBR to hash table */
     printf("Adding RCU QSBR to hash table \n");
     rcu_cfg.v = qv;
     rcu_cfg.mode = RTE_HASH_QSBR_MODE_DQ;
-    rcu_cfg.key_data_ptr = NULL;
+    //printf("Using sync \n");
+    rcu_cfg.key_data_ptr = handle;
     rcu_cfg.free_key_data_func = free_func;
+    //rcu_cfg.trigger_reclaim_limit = 1;
     /* Attach RCU QSBR to hash table */
     ret = rte_hash_rcu_qsbr_add(handle, &rcu_cfg);
     if (ret < 0) rte_exit(EXIT_FAILURE, "Attach RCU QSBR to hash table failed\n");

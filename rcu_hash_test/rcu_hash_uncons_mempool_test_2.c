@@ -32,7 +32,8 @@ rte_hash_free_key_data free_func(void *p, void *key_data)
 {
     void *key_ptr = p;
     int *data = key_data;
-    WRITER_DEBUG("Freeing %d(%p) from mempool", *data, data);
+    printf("Freeing %d(%p) from mempool\n", *data, data);
+    //WRITER_DEBUG("Freeing %d(%p) from mempool", *data, data);
     rte_mempool_put(value_pool, key_data);
 }
 
@@ -102,7 +103,7 @@ typedef struct {
 action_list_t writer = {
         3,
         {
-                {1, 1},
+                {2, 1},
                 {1, 1},
                 {1, 1},
         }
@@ -110,17 +111,17 @@ action_list_t writer = {
 
 
 action_list_t reader1 = {
-        2,
+        1,
         {
-                {1, 3},
-                {3, 4},
+                {1, 11},
+                //{3, 4},
         }
 };
 action_list_t reader2 = {
         2,
         {
-                {3, 5},
-                {1, 3},
+                {3, 2},
+                {1, 2},
         }
 };
 
@@ -151,7 +152,7 @@ int reader_thread(void *args) {
     rte_delay_ms(1000);
 
     for (i = 0; i < read_count; i++) {
-        key = 100 + i; // number of keys looked up will be equal to read_count starting from 100
+        key = 100; // number of keys looked up will be equal to read_count starting from 100
         // delay
         d = reader->actions[i].delay;
         READER_DEBUG(reader_id, "(%zd) Delay %us", i, d);
@@ -171,11 +172,6 @@ int reader_thread(void *args) {
         READER_DEBUG(reader_id, "(%zd) Read %us, val=%d(%p) for key %d", i, d, *value_pointer, value_pointer, key);
         rte_delay_ms(d * 1000);
         READER_DEBUG(reader_id, "(%zd) Read %us end", i, d);
-        // shared_pointer_copy for debug purpose, will not read shared_pointer at this stage when in real application
-//        shared_pointer_copy = __atomic_load_n(shared_pointer+pos, __ATOMIC_SEQ_CST);
-//        // however, application can still access *value_pointer (the object local pointer pointed to) at this stage
-//        READER_DEBUG(reader_id, "(%zd) Read %us end, val=%d(%p), shared=%d(%p) for key %d", i, d, *value_pointer, value_pointer, *shared_pointer_copy, shared_pointer_copy, key);
-
         rte_rcu_qsbr_unlock(qv, reader_id);
         rte_rcu_qsbr_quiescent(qv, reader_id);
     }
@@ -213,7 +209,7 @@ void writer_thread(writer_args_t *args) {
         memcpy(next_val, &i, sizeof(int));
         WRITER_DEBUG("(%zd) New value = %d(%p)", i,  *next_val, next_val);
 
-        key = 100 + i;
+        key = 100;
         d = writer.actions[i].duration;
         WRITER_DEBUG("(%zd) Write %us", i, d);
         pos = rte_hash_lookup(handle, (void*)&key);

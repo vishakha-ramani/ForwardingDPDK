@@ -4,10 +4,11 @@
     <df root="." name="0">
       <df name="build">
       </df>
-      <in>hash_cons_adv.c</in>
       <in>hash_cons_basic.c</in>
       <in>rcu_hash_uncons.c</in>
       <in>rcu_hash_uncons_mempool.c</in>
+      <in>rcu_hash_uncons_mempool_test_1.c</in>
+      <in>rcu_hash_uncons_mempool_test_2.c</in>
     </df>
   </logicalFolder>
   <projectmakefile>Makefile</projectmakefile>
