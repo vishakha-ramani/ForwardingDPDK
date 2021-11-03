@@ -118,10 +118,10 @@ action_list_t reader1 = {
         }
 };
 action_list_t reader2 = {
-        2,
+        1,
         {
-                {3, 2},
-                {1, 2},
+                {1, 1},
+//                {1, 2},
         }
 };
 

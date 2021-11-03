@@ -4,6 +4,7 @@
     <df root="." name="0">
       <df name="build">
       </df>
+      <in>adv_hash_forwarder.c</in>
       <in>basic_forwarder.c</in>
       <in>basic_hash_forwarder.c</in>
     </df>

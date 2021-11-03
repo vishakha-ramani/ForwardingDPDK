@@ -2,10 +2,10 @@
 # Copyright(c) 2010-2014 Intel Corporation
 
 # binary name
-APP = basic_send_receive
+APP = adv_send_receive
 
 # all source are stored in SRCS-y
-SRCS-y := basic_send_receive.c
+SRCS-y := adv_send_receive.c
 
 PKGCONF ?= pkg-config
 

@@ -2,8 +2,12 @@
 <configurationDescriptor version="100">
   <logicalFolder name="root" displayName="root" projectFiles="true" kind="ROOT">
     <df root="." name="0">
-      <df name="build">
+      <df name="skeleton">
+        <df name="build">
+        </df>
+        <in>basicfwd.c</in>
       </df>
+      <in>adv_send_receive.c</in>
       <in>basic_send_receive.c</in>
     </df>
   </logicalFolder>

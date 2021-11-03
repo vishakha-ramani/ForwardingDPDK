@@ -108,6 +108,8 @@ action_list_t writer = {
                 {3, 1},
                 {3, 1},
                 {1, 1},
+//                {1, 1},
+//                {1, 1},
         }
 };
 
@@ -170,7 +172,6 @@ int reader_thread(void *args) {
         rte_rcu_qsbr_lock(qv, reader_id);
         value_pointer = rte_malloc("Read pointer", sizeof(int), RTE_CACHE_LINE_SIZE);
         pos = rte_hash_lookup_data(handle, &key, &value_pointer);
-        //READER_DEBUG(reader_id, "Looking up for key %d found at position %d", key, pos);
         
         // no need to use atomic when accessing *value_pointer, since the object will never be updated
         READER_DEBUG(reader_id, "(%zd) Read %us, val=%d(%p) for key %d", i, d, *value_pointer, value_pointer, key);
@@ -205,7 +206,7 @@ void writer_thread(writer_args_t *args) {
     for (i = 0; i < write_count; i++) {
         // delay
         d = writer.actions[i].delay;
-        WRITER_DEBUG("(%zd) Delay %u", i, d);
+        WRITER_DEBUG("(%zd) Delay %us", i, d);
         rte_delay_ms(d * 1000);
 
         // prepare write, no need to be atomic
@@ -217,7 +218,6 @@ void writer_thread(writer_args_t *args) {
         d = writer.actions[i].duration;
         WRITER_DEBUG("(%zd) Write %us for key %d with value %d", i, d, key, *next_val );
         pos = rte_hash_lookup(handle, (void*)&key);
-        //WRITER_DEBUG("Updating for key %d found at %d with value %d", key, pos, *next_val);
         rte_delay_ms(d * 1000); //describes write time
         retval = rte_hash_add_key_data(handle, (void*)&key, (void*)next_val);
         WRITER_DEBUG("(%zd) Write %us end", i, d);
@@ -267,18 +267,6 @@ int main(int argc, char *argv[]) {
     ret = rte_rcu_qsbr_init(qv, num_readers);
     if (ret) rte_exit(EXIT_FAILURE, "Cannot perform qsbr init");
     
-        
-//    /* Create a queue with simple parameters */
-//    memset(&params, 0, sizeof(struct rte_rcu_qsbr_dq_parameters));
-//    //snprintf(rcu_dq_name, sizeof(rcu_dq_name), "TEST_RCU");
-//    params.name = "rcu_dq";
-//    params.free_fn = free_func;
-//    params.v = qv;
-//    params.size = HASH_ENTRIES;
-//    params.esize = 64;
-//    params.trigger_reclaim_limit = 0;
-//    params.max_reclaim_size = params.size;
-//    dq = rte_rcu_qsbr_dq_create(&params);
     
     /* Create and populate shared data structure i.e. hash table*/
     printf("Creating hash table. \n");
@@ -291,7 +279,6 @@ int main(int argc, char *argv[]) {
     printf("Adding RCU QSBR to hash table \n");
     rcu_cfg.v = qv;
     rcu_cfg.mode = RTE_HASH_QSBR_MODE_DQ;
-    //printf("Using sync \n");
     rcu_cfg.key_data_ptr = handle;
     rcu_cfg.free_key_data_func = free_func;
     //rcu_cfg.trigger_reclaim_limit = 1;
