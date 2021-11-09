@@ -2,10 +2,10 @@
 # Copyright(c) 2010-2014 Intel Corporation
 
 # binary name
-APP = adv_hash_forwarder
+APP = adv_hash_forwarder_1
 
 # all source are stored in SRCS-y
-SRCS-y := adv_hash_forwarder.c
+SRCS-y := adv_hash_forwarder_1.c
 
 PKGCONF ?= pkg-config
 

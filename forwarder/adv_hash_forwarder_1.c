@@ -13,6 +13,7 @@
 #include <unistd.h>
 #include <rte_common.h>
 #include <rte_hash.h>
+#include <rte_jhash.h>
 #include <rte_mbuf_dyn.h>
 #include <sys/time.h>
 #include <rte_time.h>
@@ -111,6 +112,15 @@ struct value{
     uint64_t t; //timestamp of address
 };
 
+struct value value_arr[HASH_ENTRIES];
+
+struct rte_ether_addr dst_mac_addr[] = {
+    {{0x98,0x03,0x9b,0x32,0x8d,0xda}},
+    {{0x98,0x03,0x9b,0x32,0x8d,0xda}},
+    {{0x98,0x03,0x9b,0x32,0x8d,0xda}},
+    {{0x98,0x03,0x9b,0x32,0x8d,0xda}},
+    {{0x98,0x03,0x9b,0x32,0x8d,0xda}}
+};  // 98:03:9b:32:8d:da
 
 rte_hash_free_key_data free_func(void *p, void *key_data)
 {
@@ -272,7 +282,7 @@ lcore_stat(__rte_unused void *arg)
         sleep(1); // report stats every second
         printf("Number of data packets received %"PRIu64 "\n", rx_count);
         printf("Number of data packets transmitted %"PRIu64 "\n", tx_count);
-        printf("Number of control packets received %"PRIu64 "\n", rx_count_control);
+        //printf("Number of control packets received %"PRIu64 "\n", rx_count_control);
     }
 }
 
@@ -333,7 +343,6 @@ void my_receive(struct receive_params *p)
                 continue;
         
         uint64_t now = rte_rdtsc_precise();
-        
         for(int i = 0; i < nb_rx; i++)
         {
             my_pkt = rte_pktmbuf_mtod(bufs[i], struct my_message *);
@@ -345,9 +354,7 @@ void my_receive(struct receive_params *p)
             //printf("Packet length %"PRIu32"\n",rte_pktmbuf_pkt_len(bufs[i]));
             rx_count = rx_count + 1;
             key = my_pkt->dst_addr;
-            printf("Looking up \n");
             retval = rte_hash_lookup_data(handle, (void*)&key, (void **)&lkp_val);
-            printf("Looked up\n");
             if(unlikely(retval < 0)){
                 printf("Error looking up for key %"PRIu16"\n", key);
                 continue;
@@ -391,15 +398,20 @@ receive_control(struct receive_params *p)
     struct control_message *ctrl;
     uint16_t eth_type; 
     uint16_t key;
-    struct value val;
+    //struct rte_ether_addr addr;
     
-    //printf("Measured frequency of counter is %"PRIu64"\n", rte_get_tsc_hz());
+    printf("Measured frequency of counter is %"PRIu64"\n", rte_get_tsc_hz());
     
-    printf("\nCore %u receiving control packets. [Ctrl+C to quit]\n", rte_lcore_id());
+    printf("\nCore %u receiving control packets. [Ctrl+C to quit]\n",
+                    rte_lcore_id());
     
     struct rte_hash *handle = p->handle;
     uint16_t port = p->port;
     uint16_t rxq = p->queue_id;
+    
+    uint64_t totalcycles = 0;
+    uint64_t totalpackets = 0;
+    uint64_t totalbatches = 0;
     
     for(;;){
         struct rte_mbuf *bufs[CONTROL_BURST_SIZE];
@@ -421,14 +433,16 @@ receive_control(struct receive_params *p)
                 //printf("Packet length %"PRIu32"\n",rte_pktmbuf_pkt_len(bufs[i]));
                 rx_count_control += 1;
                 key = ctrl->dst_addr;
+                struct value val;
+//                //memcpy(&val->dest_mac_addr, &ctrl->eth_hdr.s_addr, sizeof(rte_ether_addr));
                 rte_ether_addr_copy(&ctrl->eth_hdr.s_addr, &val.dest_mac_addr);
                 memcpy(&val.t, &ctrl->t, sizeof(uint64_t));
                 retval = rte_hash_add_key_data(handle, (void*)&key, (void*)&val);
-                if(unlikely(retval < 0)){
-                    rte_exit(EXIT_FAILURE, "Unable to add entry %"PRIu16
-                            "in the hash table \n", key);
-                    continue;
-                }      
+//                if(unlikely(retval < 0)){
+//                    rte_exit(EXIT_FAILURE, "Unable to add entry %"PRIu16
+//                            "in the hash table \n", key);
+//                    continue;
+//                }      
             }
             rte_pktmbuf_free(bufs[i]);
         }  
@@ -442,14 +456,14 @@ int
 main(int argc, char *argv[])
 {
     struct rte_mempool *mbuf_pool;
-    //struct rte_mempool *value_pool;
+    struct rte_mempool *value_pool;
     unsigned nb_ports;
     uint16_t portid;
     uint16_t port;
     unsigned lcore_id;
     struct rte_hash * handle;
     unsigned int num_cores;
-    size_t mem_size, num_readers;
+    size_t mem_size;
     struct rte_rcu_qsbr *qv;
     struct rte_hash_rcu_config rcu_cfg = {0};
     struct receive_params data = {handle, 0, 0};
@@ -515,42 +529,41 @@ main(int argc, char *argv[])
                                     "polling thread.\n\tPerformance will "
                                     "not be optimal.\n", port);
     
-    
-    num_readers = -1; // -1 because there is an lcorestat function to be launched on separate core
+    num_cores = 0; // -1 because there is an lcorestat function to be launched on separate core
     RTE_LCORE_FOREACH_SLAVE(lcore_id) {
             //enabled_core_ids[num_cores] = lcore_id;
-            num_readers++;
+            num_cores++;
     }
     
-    num_cores = rte_lcore_count();
-    printf("num_cores=%u\n", num_cores);
-    // we need to start 3 threads, 1 for writer and 2 for readers
-    if (num_cores < num_readers + 1) rte_exit(EXIT_FAILURE, "# of cores has to be %zd or more.\n", num_readers + 1);
+//    num_cores = rte_lcore_count();
+//    printf("num_cores=%u\n", num_cores);
+//    // we need to start 3 threads, 1 for writer and 2 for readers
+//    if (num_cores < num_readers + 1) rte_exit(EXIT_FAILURE, "# of cores has to be %zd or more.\n", num_readers + 1);
     
     // prepare RCU
-    mem_size = rte_rcu_qsbr_get_memsize(num_readers);
+    mem_size = rte_rcu_qsbr_get_memsize(num_cores-1);
     printf("The size of the memory required by a Quiescent State variable is %zu\n", mem_size);
 
     qv = rte_zmalloc("RCU QSBR", mem_size, RTE_CACHE_LINE_SIZE);
     if (!qv) rte_exit(EXIT_FAILURE, "Cannot malloc qv");
 
-    ret = rte_rcu_qsbr_init(qv, num_readers);
+    ret = rte_rcu_qsbr_init(qv, num_cores-1);
     if (ret) rte_exit(EXIT_FAILURE, "Cannot perform qsbr init");
 
     /* Create and populate hash table*/
     printf("Creating hash table. \n");
     handle = create_hash_table(HASH_ENTRIES+1);
     
-//    /* Add RCU QSBR to hash table */
-//    printf("Adding RCU QSBR to hash table \n");
-//    rcu_cfg.v = qv;
-//    rcu_cfg.mode = RTE_HASH_QSBR_MODE_DQ;
-//    rcu_cfg.key_data_ptr = handle;
-//    rcu_cfg.free_key_data_func = free_func;
-//    //rcu_cfg.trigger_reclaim_limit = 1;
-//    /* Attach RCU QSBR to hash table */
-//    ret = rte_hash_rcu_qsbr_add(handle, &rcu_cfg);
-//    if (ret < 0) rte_exit(EXIT_FAILURE, "Attach RCU QSBR to hash table failed\n");
+    /* Add RCU QSBR to hash table */
+    printf("Adding RCU QSBR to hash table \n");
+    rcu_cfg.v = qv;
+    rcu_cfg.mode = RTE_HASH_QSBR_MODE_DQ;
+    rcu_cfg.key_data_ptr = handle;
+    rcu_cfg.free_key_data_func = free_func;
+    //rcu_cfg.trigger_reclaim_limit = 1;
+    /* Attach RCU QSBR to hash table */
+    ret = rte_hash_rcu_qsbr_add(handle, &rcu_cfg);
+    if (ret < 0) rte_exit(EXIT_FAILURE, "Attach RCU QSBR to hash table failed\n");
     
     printf("Populating hash table\n");
     populate_hash_table(handle, HASH_ENTRIES, value_pool);
@@ -562,19 +575,8 @@ main(int argc, char *argv[])
     }
     rte_eal_remote_launch(lcore_stat, NULL, lcore_id);
     
-    
-    lcore_id = rte_get_next_lcore(lcore_id, 1, 0);
-    if(lcore_id == RTE_MAX_LCORE)
-    {
-        rte_exit(EXIT_FAILURE, "Slave core id required!");
-    }
-    //rte_eal_remote_launch((lcore_function_t *)my_receive, &data, lcore_id);
-    
-    //receive_control(&control);
-    
+    //struct receive_params data = {handle, 0, 0};
     my_receive(&data);
-    
-    //rte_eal_mp_wait_lcore();
     
     return 0;
 }
