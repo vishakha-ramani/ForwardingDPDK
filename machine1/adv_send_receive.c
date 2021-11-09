@@ -22,11 +22,12 @@
 #define NUM_MBUFS ((64*1024)-1)
 #define MBUF_CACHE_SIZE 250
 #define BURST_SIZE 256
-#define CONTROL_BURST_SIZE 256
+#define CONTROL_BURST_SIZE 8
 #define PTP_PROTOCOL 0x88F7
 uint64_t rx_count;
 uint64_t startTime;
 uint64_t cyclesSum;
+uint64_t ctrlnow;
 
 static struct rte_mempool *mbuf_pool;
 
@@ -194,10 +195,13 @@ void my_receive()
              messages */
             if(unlikely(eth_type != PTP_PROTOCOL))
                 continue;
-
+            
+            if(unlikely(my_pkt->t != ctrlnow))
+                continue;
             rx_count = rx_count + 1;
             /* get timestamp of address update*/
             //addrTime += now - my_pkt->t;
+            //printf("Address timestamp looked up at forwarder %"PRIu64"\n", my_pkt->t);
             totalcycles += now - my_pkt->T;
             totalpackets += 1;
             
@@ -307,7 +311,7 @@ send_control(struct send_params *p)
     retval = rte_eth_macaddr_get(port, &src_mac_addr); // get MAC address of Port 0 on node1-1
     struct rte_ether_addr dst_mac_addr = {{0x98,0x03,0x9b,0x32,0x7d,0x33}}; //MAC address 98:03:9b:32:7d:33
     struct control_message *ctrl;
-    uint64_t ctrlnow;
+    //uint64_t ctrlnow;
     
     //printf("Measured frequency of control packet sending machine is %"PRIu64"\n", rte_get_tsc_hz());
     
@@ -317,7 +321,7 @@ send_control(struct send_params *p)
     uint16_t sent_packets = CONTROL_BURST_SIZE;
     do{
         ctrlnow = rte_rdtsc();
-        rand = 100 + rte_rand()%10;
+        //rand = 100 + rte_rand()%10;
         
         for(int i = 0; i < sent_packets; i ++)
         {
@@ -330,6 +334,7 @@ send_control(struct send_params *p)
             ctrl = rte_pktmbuf_mtod(bufs[i], struct control_message*);
             ctrl->type = 2;
             ctrl->t = ctrlnow;
+            rand = 100 + rte_rand()%10;
             //ctrl->dst_addr = rand;
             ctrl->dst_addr = 101;
             rte_ether_addr_copy(&src_mac_addr, &ctrl->eth_hdr.s_addr);
@@ -370,8 +375,8 @@ main(int argc, char *argv[])
     unsigned nb_ports;
     uint16_t portid;
     uint16_t port;
-    uint64_t max_packets = 100000;
-    uint64_t num_control = 600; // number of control updates
+    uint64_t max_packets = 1000;
+    uint64_t num_control = 10; // number of control updates
     unsigned lcore_id;
 
     /* Initialize the Environment Abstraction Layer (EAL). */
@@ -429,7 +434,7 @@ main(int argc, char *argv[])
     {
         rte_exit(EXIT_FAILURE, "Slave core id required!");
     }
-    rte_eal_remote_launch((lcore_function_t *)send_control, &control, lcore_id);
+    //rte_eal_remote_launch((lcore_function_t *)send_control, &control, lcore_id);
     
     /* call lcore stat on another lcore*/
     lcore_id = rte_get_next_lcore(lcore_id, 1, 0);
