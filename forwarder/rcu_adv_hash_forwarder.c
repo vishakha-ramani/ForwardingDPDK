@@ -30,12 +30,13 @@
 #define MBUF_CACHE_SIZE 250
 #define BURST_SIZE 256
 #define PTP_PROTOCOL 0x88F7
-#define HASH_ENTRIES 1024*2
+#define HASH_ENTRIES 1024
 #define CONTROL_BURST_SIZE 256
 uint64_t rx_count; // global variable to keep track of the number of received packets (to be displayed every second)
 uint64_t tx_count;
 uint64_t rx_count_control;
 struct rte_mempool *value_pool;
+static volatile uint32_t thr_id;
 
 /* Rx/Tx callbacks variables - HW timestamping is not included since 
  * rte_mbuf_timestamp_t was not recognized. */
@@ -126,7 +127,7 @@ rte_hash_free_key_data free_func(void *p, void *key_data)
 {
     void *key_ptr = p;
     int *data = key_data;
-    printf("Freeing %d(%p) from mempool\n", *data, data);
+    //printf("Freeing %d(%p) from mempool\n", *data, data);
     //WRITER_DEBUG("Freeing %d(%p) from mempool", *data, data);
     rte_mempool_put(value_pool, key_data);
 }
@@ -177,7 +178,8 @@ populate_hash_table(const struct rte_hash *h, uint16_t num_entries, struct mempo
         if(ret < 0)
             rte_exit(EXIT_FAILURE, "Unable to add entry %"PRIu16" in the hash table \n", dst);
         else
-            total++;  
+            total++;
+        //printf("Added key %d with data %d(%p) in hash table. \n", dst, to_add->t, to_add);
     }
     printf("Total number of keys added is %"PRIu16"\n", total);
 }
@@ -282,7 +284,7 @@ lcore_stat(__rte_unused void *arg)
         sleep(1); // report stats every second
         printf("Number of data packets received %"PRIu64 "\n", rx_count);
         printf("Number of data packets transmitted %"PRIu64 "\n", tx_count);
-        //printf("Number of control packets received %"PRIu64 "\n", rx_count_control);
+        printf("Number of control packets received %"PRIu64 "\n", rx_count_control);
     }
 }
 
@@ -304,10 +306,25 @@ struct control_message{
 };
 
 struct receive_params{
+    struct rte_rcu_qsbr *qv;
     struct rte_hash *handle;
     uint16_t port;
     uint16_t queue_id;
 };
+
+
+/* Simple way to allocate thread ids in 0 to RTE_MAX_LCORE space */
+static inline uint32_t
+alloc_thread_id(void)
+{
+	uint32_t tmp_thr_id;
+
+	tmp_thr_id = __atomic_fetch_add(&thr_id, 1, __ATOMIC_RELAXED);
+	if (tmp_thr_id >= RTE_MAX_LCORE)
+		printf("Invalid thread id %u\n", tmp_thr_id);
+
+	return tmp_thr_id;
+}
 
 void my_receive(struct receive_params *p)
 {
@@ -316,13 +333,19 @@ void my_receive(struct receive_params *p)
     uint16_t eth_type; 
     rx_count = 0;
     tx_count = 0;
+    uint16_t key;
+    struct value *value_pointer;
+    
     struct rte_hash *handle = p->handle;
+    struct rte_rcu_qsbr *qv = p->qv;
     uint16_t port = p->port;
+    unsigned reader_id = alloc_thread_id();
+    printf("Reader id %d\n", reader_id);
     struct rte_ether_addr src_mac_addr;
     retval = rte_eth_macaddr_get(port, &src_mac_addr); // get MAC address of Port 0 on node1-1
-    uint16_t key;
-    struct value *lkp_val;
     
+    rte_rcu_qsbr_thread_register(qv, reader_id);
+    rte_rcu_qsbr_thread_online(qv, reader_id);
     
     //printf("Measured frequency of counter is %"PRIu64"\n", rte_get_tsc_hz());
     
@@ -345,6 +368,7 @@ void my_receive(struct receive_params *p)
         uint64_t now = rte_rdtsc_precise();
         for(int i = 0; i < nb_rx; i++)
         {
+            //rte_rcu_qsbr_lock(qv, reader_id);
             my_pkt = rte_pktmbuf_mtod(bufs[i], struct my_message *);
             eth_type = rte_be_to_cpu_16(my_pkt->eth_hdr.ether_type);
             
@@ -354,14 +378,18 @@ void my_receive(struct receive_params *p)
             //printf("Packet length %"PRIu32"\n",rte_pktmbuf_pkt_len(bufs[i]));
             rx_count = rx_count + 1;
             key = my_pkt->dst_addr;
-            retval = rte_hash_lookup_data(handle, (void*)&key, (void **)&lkp_val);
+            retval = rte_mempool_get(value_pool, (void**)&value_pointer);
+            retval = rte_hash_lookup_data(handle, (void*)&key, (void **)&value_pointer);
             if(unlikely(retval < 0)){
                 printf("Error looking up for key %"PRIu16"\n", key);
                 continue;
             }
-            memcpy(&my_pkt->t, &lkp_val->t, sizeof(uint64_t));
+            memcpy(&my_pkt->t, &value_pointer->t, sizeof(uint64_t));
             rte_ether_addr_copy(&src_mac_addr, &my_pkt->eth_hdr.s_addr);
-            rte_ether_addr_copy(&lkp_val->dest_mac_addr, &my_pkt->eth_hdr.d_addr);
+            rte_ether_addr_copy(&value_pointer->dest_mac_addr, &my_pkt->eth_hdr.d_addr);
+            rte_mempool_put(value_pool, value_pointer);
+            //rte_rcu_qsbr_unlock(qv, reader_id);
+            rte_rcu_qsbr_quiescent(qv, reader_id);
         }
         
         
@@ -398,13 +426,14 @@ receive_control(struct receive_params *p)
     struct control_message *ctrl;
     uint16_t eth_type; 
     uint16_t key;
-    //struct rte_ether_addr addr;
+    struct value *next_val;
     
     printf("Measured frequency of counter is %"PRIu64"\n", rte_get_tsc_hz());
     
-    printf("\nCore %u receiving control packets. [Ctrl+C to quit]\n",
+    printf("Core %u receiving control packets. [Ctrl+C to quit]\n",
                     rte_lcore_id());
     
+    struct rte_rcu_qsbr *qv = p->qv;
     struct rte_hash *handle = p->handle;
     uint16_t port = p->port;
     uint16_t rxq = p->queue_id;
@@ -430,19 +459,22 @@ receive_control(struct receive_params *p)
              messages */
             if(likely(eth_type == PTP_PROTOCOL))
             {
-                //printf("Packet length %"PRIu32"\n",rte_pktmbuf_pkt_len(bufs[i]));
                 rx_count_control += 1;
                 key = ctrl->dst_addr;
-                struct value val;
-//                //memcpy(&val->dest_mac_addr, &ctrl->eth_hdr.s_addr, sizeof(rte_ether_addr));
-                rte_ether_addr_copy(&ctrl->eth_hdr.s_addr, &val.dest_mac_addr);
-                memcpy(&val.t, &ctrl->t, sizeof(uint64_t));
-                retval = rte_hash_add_key_data(handle, (void*)&key, (void*)&val);
-//                if(unlikely(retval < 0)){
-//                    rte_exit(EXIT_FAILURE, "Unable to add entry %"PRIu16
-//                            "in the hash table \n", key);
-//                    continue;
-//                }      
+                //printf("Updating for key %d\n", key);
+                retval = rte_mempool_get(value_pool, (void**)&next_val);
+                if (retval != 0) {
+                    rte_exit(EXIT_FAILURE, "Unable to get entry from the value pool \n");
+                }
+                rte_ether_addr_copy(&ctrl->eth_hdr.s_addr, &next_val->dest_mac_addr);
+                memcpy(&next_val->t, &ctrl->t, sizeof(uint64_t));
+                retval = rte_hash_add_key_data(handle, (void*)&key, (void*)next_val);
+                rte_mempool_put(value_pool, next_val);
+                if(unlikely(retval < 0)){
+                    rte_exit(EXIT_FAILURE, "Unable to add entry %"PRIu16
+                            "in the hash table \n", key);
+                    continue;
+                }      
             }
             rte_pktmbuf_free(bufs[i]);
         }  
@@ -456,7 +488,7 @@ int
 main(int argc, char *argv[])
 {
     struct rte_mempool *mbuf_pool;
-    struct rte_mempool *value_pool;
+    //struct rte_mempool *value_pool;
     unsigned nb_ports;
     uint16_t portid;
     uint16_t port;
@@ -466,8 +498,7 @@ main(int argc, char *argv[])
     size_t mem_size;
     struct rte_rcu_qsbr *qv;
     struct rte_hash_rcu_config rcu_cfg = {0};
-    struct receive_params data = {handle, 0, 0};
-    struct receive_params control = {handle, 1, 0};
+
     
     struct option lgopts[] = {
     { NULL,  0, 0, 0 }
@@ -500,7 +531,7 @@ main(int argc, char *argv[])
     if (mbuf_pool == NULL)
             rte_exit(EXIT_FAILURE, "Cannot create mbuf pool\n");
     
-    value_pool = rte_mempool_create("VALUE_POOL", 2047*5, sizeof(struct value), MBUF_CACHE_SIZE, 0,
+    value_pool = rte_mempool_create("VALUE_POOL", 1048575, sizeof(struct value), MBUF_CACHE_SIZE, 0,
                                     NULL, NULL, NULL, NULL,
                                     rte_socket_id(), MEMPOOL_F_SP_PUT | MEMPOOL_F_SC_GET);
 
@@ -529,25 +560,17 @@ main(int argc, char *argv[])
                                     "polling thread.\n\tPerformance will "
                                     "not be optimal.\n", port);
     
-    num_cores = 0; // -1 because there is an lcorestat function to be launched on separate core
-    RTE_LCORE_FOREACH_SLAVE(lcore_id) {
-            //enabled_core_ids[num_cores] = lcore_id;
-            num_cores++;
-    }
     
-//    num_cores = rte_lcore_count();
-//    printf("num_cores=%u\n", num_cores);
-//    // we need to start 3 threads, 1 for writer and 2 for readers
-//    if (num_cores < num_readers + 1) rte_exit(EXIT_FAILURE, "# of cores has to be %zd or more.\n", num_readers + 1);
+    num_cores = rte_lcore_count();
     
     // prepare RCU
-    mem_size = rte_rcu_qsbr_get_memsize(num_cores-1);
+    mem_size = rte_rcu_qsbr_get_memsize(num_cores);
     printf("The size of the memory required by a Quiescent State variable is %zu\n", mem_size);
 
     qv = rte_zmalloc("RCU QSBR", mem_size, RTE_CACHE_LINE_SIZE);
     if (!qv) rte_exit(EXIT_FAILURE, "Cannot malloc qv");
 
-    ret = rte_rcu_qsbr_init(qv, num_cores-1);
+    ret = rte_rcu_qsbr_init(qv, num_cores);
     if (ret) rte_exit(EXIT_FAILURE, "Cannot perform qsbr init");
 
     /* Create and populate hash table*/
@@ -568,15 +591,25 @@ main(int argc, char *argv[])
     printf("Populating hash table\n");
     populate_hash_table(handle, HASH_ENTRIES, value_pool);
     
+    struct receive_params data = {qv, handle, 0, 0};
+    struct receive_params control = {qv, handle, 1, 0};
+    
     lcore_id = rte_get_next_lcore(-1, 1, 0);
+    if(lcore_id == RTE_MAX_LCORE)
+    {
+        rte_exit(EXIT_FAILURE, "Slave core id required!"); 
+    }
+    rte_eal_remote_launch((lcore_function_t *)my_receive, &data, lcore_id);//on lcore 4
+    
+    lcore_id = rte_get_next_lcore(lcore_id, 1, 0);
     if(lcore_id == RTE_MAX_LCORE)
     {
         rte_exit(EXIT_FAILURE, "Slave core id required!");
     }
-    rte_eal_remote_launch(lcore_stat, NULL, lcore_id);
+    rte_eal_remote_launch(lcore_stat, NULL, lcore_id); //on lcore 6
     
-    //struct receive_params data = {handle, 0, 0};
-    my_receive(&data);
-    
+    receive_control(&control); //on lcore 2
+    rte_eal_mp_wait_lcore();
+
     return 0;
 }

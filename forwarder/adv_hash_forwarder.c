@@ -486,7 +486,7 @@ main(int argc, char *argv[])
     if (mbuf_pool == NULL)
             rte_exit(EXIT_FAILURE, "Cannot create mbuf pool\n");
     
-    value_pool = rte_mempool_create("VALUE_POOL", 2047*5, sizeof(struct value), MBUF_CACHE_SIZE, 0,
+    value_pool = rte_mempool_create("VALUE_POOL", 65535, sizeof(struct value), MBUF_CACHE_SIZE, 0,
                                     NULL, NULL, NULL, NULL,
                                     rte_socket_id(), MEMPOOL_F_SP_PUT | MEMPOOL_F_SC_GET);
 

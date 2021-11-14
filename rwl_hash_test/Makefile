@@ -2,10 +2,10 @@
 # Copyright(c) 2010-2014 Intel Corporation
 
 # binary name
-APP = rcu_adv_hash_forwarder
+APP = rwl_hash
 
 # all source are stored in SRCS-y
-SRCS-y := rcu_adv_hash_forwarder.c
+SRCS-y := rwl_hash.c
 
 PKGCONF ?= pkg-config
 
