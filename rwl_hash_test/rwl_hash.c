@@ -103,10 +103,10 @@ typedef struct {
 } writer_args_t;
 
 action_list_t writer = {
-        2,
+        1,
         {
-                {2, 1},
-                {1, 1},
+                {1, 3},
+//                {1, 1},
 //                {3, 1},
 //                {1, 1},
 //                {1, 1},
@@ -116,10 +116,10 @@ action_list_t writer = {
 
 
 action_list_t reader1 = {
-        2,
+        1,
         {
-                {1, 3},
-                {1, 1},
+                {2, 1},
+//                {1, 1},
 //                {3, 4},
         }
 };
@@ -166,19 +166,28 @@ int reader_thread(void *args) {
         d = reader->actions[i].duration;
         
         //rte_rwlock_read_lock(rwl);
-        retval = rte_mempool_get(value_pool, (void**)&value_pointer);
-        retval = rte_hash_lookup_data(handle, (void*)&key, (void**)&value_pointer);
-        if(unlikely(retval < 0)){
-                printf("Error looking up for key %"PRIu16"\n", key);
-                continue;
+        while(true) {
+        READER_DEBUG(reader_id, "Try read lock");    
+        if (!rte_rwlock_read_trylock(rwl)) {
+            //READER_DEBUG(reader_id, "(%zd) Value returned by trylock is %d", retval);
+            retval = rte_mempool_get(value_pool, (void**)&value_pointer);
+            retval = rte_hash_lookup_data(handle, (void*)&key, (void**)&value_pointer);
+            if(unlikely(retval < 0)){
+                    printf("Error looking up for key %"PRIu16"\n", key);
+                    continue;
+            }
+
+            // no need to use atomic when accessing *value_pointer, since the object will never be updated
+            READER_DEBUG(reader_id, "(%zd) Read %us, val=%d(%p) for key %d", i, d, *value_pointer, value_pointer, key);
+            rte_delay_ms(d * 1000);
+            rte_mempool_put(value_pool, value_pointer);
+            READER_DEBUG(reader_id, "(%zd) Read %us end", i, d);
+            rte_rwlock_read_unlock(rwl);
+            return;
         }
-        
-        // no need to use atomic when accessing *value_pointer, since the object will never be updated
-        READER_DEBUG(reader_id, "(%zd) Read %us, val=%d(%p) for key %d", i, d, *value_pointer, value_pointer, key);
-        rte_delay_ms(d * 1000);
-        rte_mempool_put(value_pool, value_pointer);
-        READER_DEBUG(reader_id, "(%zd) Read %us end", i, d);
-        //rte_rwlock_read_unlock(rwl);
+        else
+            rte_delay_ms(1000);
+        }
     }
     return 0;
 }
@@ -224,7 +233,7 @@ void writer_thread(writer_args_t *args) {
         key = 100;
         d = writer.actions[i].duration;
         
-        //rte_rwlock_write_lock(rwl);
+        rte_rwlock_write_lock(rwl);
         WRITER_DEBUG("(%zd) Write %us for key %d with value %d", i, d, key, *next_val );
         rte_delay_ms(d * 1000); //describes write time
         retval = rte_hash_lookup_data(handle, (void*)&key, (void**)&old_val);
@@ -232,7 +241,7 @@ void writer_thread(writer_args_t *args) {
         retval = rte_hash_add_key_data(handle, (void*)&key, (void*)next_val);
         rte_mempool_put(value_pool, old_val);
         WRITER_DEBUG("(%zd) Write %us end", i, d);
-        //rte_rwlock_write_unlock(rwl);
+        rte_rwlock_write_unlock(rwl);
     }
 }
 
