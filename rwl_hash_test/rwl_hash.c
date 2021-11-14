@@ -51,7 +51,7 @@ create_hash_table(uint16_t num_entries)
         .hash_func_init_val = 0,   
     };
     params.name = "hash_rcu";
-    params.extra_flag |= RTE_HASH_EXTRA_FLAGS_RW_CONCURRENCY_LF ;
+    params.extra_flag |= RTE_HASH_EXTRA_FLAGS_RW_CONCURRENCY;
     
     handle = rte_hash_create(&params);
     if (handle == NULL) {
@@ -103,12 +103,12 @@ typedef struct {
 } writer_args_t;
 
 action_list_t writer = {
-        4,
+        2,
         {
-                {1, 2},
-                {3, 1},
-                {3, 1},
+                {2, 1},
                 {1, 1},
+//                {3, 1},
+//                {1, 1},
 //                {1, 1},
 //                {1, 1},
         }
@@ -116,11 +116,11 @@ action_list_t writer = {
 
 
 action_list_t reader1 = {
-        3,
+        2,
         {
+                {1, 3},
                 {1, 1},
-                {2, 1},
-                {3, 4},
+//                {3, 4},
         }
 };
 action_list_t reader2 = {
@@ -165,15 +165,20 @@ int reader_thread(void *args) {
         // read
         d = reader->actions[i].duration;
         
-        rte_rwlock_read_lock(rwl);
-        value_pointer = rte_malloc("Read pointer", sizeof(int), RTE_CACHE_LINE_SIZE);
-        pos = rte_hash_lookup_data(handle, &key, &value_pointer);
+        //rte_rwlock_read_lock(rwl);
+        retval = rte_mempool_get(value_pool, (void**)&value_pointer);
+        retval = rte_hash_lookup_data(handle, (void*)&key, (void**)&value_pointer);
+        if(unlikely(retval < 0)){
+                printf("Error looking up for key %"PRIu16"\n", key);
+                continue;
+        }
         
         // no need to use atomic when accessing *value_pointer, since the object will never be updated
         READER_DEBUG(reader_id, "(%zd) Read %us, val=%d(%p) for key %d", i, d, *value_pointer, value_pointer, key);
         rte_delay_ms(d * 1000);
+        rte_mempool_put(value_pool, value_pointer);
         READER_DEBUG(reader_id, "(%zd) Read %us end", i, d);
-        rte_rwlock_read_unlock(rwl);
+        //rte_rwlock_read_unlock(rwl);
     }
     return 0;
 }
@@ -182,12 +187,13 @@ void writer_thread(writer_args_t *args) {
     size_t i;
     size_t write_count = writer.count;
     unsigned d;
-    int key = 100;
-    int retval, pos;
+    int key;
+    int retval;
     writer_args_t *writer_args = args;
-    struct rte_rcu_qsbr *qv = writer_args->qv;
+    rte_rwlock_t *rwl = writer_args->rwl;
     struct rte_hash *handle = writer_args->handle;
     volatile int *next_val;
+    int *old_val;
     
     WRITER_DEBUG("Starting writer, action_count=%zd", writer.count);
 
@@ -200,18 +206,33 @@ void writer_thread(writer_args_t *args) {
         WRITER_DEBUG("(%zd) Delay %us", i, d);
         rte_delay_ms(d * 1000);
 
-        // prepare write, no need to be atomic
-        next_val = rte_malloc("Next Value", sizeof(int), RTE_CACHE_LINE_SIZE);
+        key = 100;
+        
+        // allocate memory for new value
+        retval = rte_mempool_get(value_pool, &next_val);
+        if (retval != 0) {
+            rte_exit(EXIT_FAILURE, "Unable to get new value from the value pool \n");
+        }
         memcpy(next_val, &i, sizeof(int));
-        WRITER_DEBUG("(%zd) New value = %d(%p)", i,  *next_val, next_val);
+        
+        // allocate memory for old value
+        retval = rte_mempool_get(value_pool, &old_val);
+        if (retval != 0) {
+            rte_exit(EXIT_FAILURE, "Unable to get old value from the value pool \n");
+        }
 
         key = 100;
         d = writer.actions[i].duration;
+        
+        //rte_rwlock_write_lock(rwl);
         WRITER_DEBUG("(%zd) Write %us for key %d with value %d", i, d, key, *next_val );
-        pos = rte_hash_lookup(handle, (void*)&key);
         rte_delay_ms(d * 1000); //describes write time
+        retval = rte_hash_lookup_data(handle, (void*)&key, (void**)&old_val);
+        WRITER_DEBUG("(%zd) New value = %d(%p), Old value = %d(%p)", i,  *next_val, next_val, *old_val, old_val);
         retval = rte_hash_add_key_data(handle, (void*)&key, (void*)next_val);
+        rte_mempool_put(value_pool, old_val);
         WRITER_DEBUG("(%zd) Write %us end", i, d);
+        //rte_rwlock_write_unlock(rwl);
     }
 }
 
@@ -220,7 +241,7 @@ int main(int argc, char *argv[]) {
     unsigned int num_cores, lcore_id;
     size_t mem_size, num_readers, i;
     reader_args_t *reader_args;
-    rte_rwlock_t rwl;
+    rte_rwlock_t *rwl;
     
     ret = rte_eal_init(argc, argv);
     printf("rte_eal_init returned %d\n", ret);
@@ -254,17 +275,6 @@ int main(int argc, char *argv[]) {
     printf("Creating hash table. \n");
     struct rte_hash * handle;
     handle = create_hash_table(HASH_ENTRIES);
-    
-//    /* Add RCU QSBR to hash table */
-//    printf("Adding RCU QSBR to hash table \n");
-//    rcu_cfg.v = qv;
-//    rcu_cfg.mode = RTE_HASH_QSBR_MODE_DQ;
-//    rcu_cfg.key_data_ptr = handle;
-//    rcu_cfg.free_key_data_func = free_func;
-//    //rcu_cfg.trigger_reclaim_limit = 1;
-//    /* Attach RCU QSBR to hash table */
-//    ret = rte_hash_rcu_qsbr_add(handle, &rcu_cfg);
-//    if (ret < 0) rte_exit(EXIT_FAILURE, "Attach RCU QSBR to hash table failed\n");
     
     /*Populate hash table*/
     printf("Populating hash table\n");

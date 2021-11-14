@@ -6,7 +6,6 @@
       <in>basic_forwarder.c</in>
       <in>basic_hash_forwarder.c</in>
       <in>rcu_adv_hash_forwarder.c</in>
-      <in>rwl_adv_hash_forwarder.c</in>
     </df>
     <logicalFolder name="ExternalFiles"
                    displayName="Important Files"
@@ -70,10 +69,6 @@
         </cTool>
       </item>
       <item path="rcu_adv_hash_forwarder.c" ex="false" tool="0" flavor2="0">
-        <cTool flags="0">
-        </cTool>
-      </item>
-      <item path="rwl_adv_hash_forwarder.c" ex="false" tool="0" flavor2="0">
         <cTool flags="0">
         </cTool>
       </item>

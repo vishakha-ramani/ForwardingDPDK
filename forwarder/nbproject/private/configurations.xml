@@ -8,7 +8,6 @@
       <in>basic_forwarder.c</in>
       <in>basic_hash_forwarder.c</in>
       <in>rcu_adv_hash_forwarder.c</in>
-      <in>rwl_adv_hash_forwarder.c</in>
     </df>
   </logicalFolder>
   <projectmakefile>Makefile</projectmakefile>

@@ -30,8 +30,8 @@
 #define MBUF_CACHE_SIZE 250
 #define BURST_SIZE 256
 #define PTP_PROTOCOL 0x88F7
-#define HASH_ENTRIES 32
-#define CONTROL_BURST_SIZE 8
+#define HASH_ENTRIES 1024
+#define CONTROL_BURST_SIZE 256
 uint64_t rx_count; // global variable to keep track of the number of received packets (to be displayed every second)
 uint64_t tx_count;
 uint64_t rx_count_control;
@@ -127,7 +127,7 @@ rte_hash_free_key_data free_func(void *p, void *key_data)
 {
     void *key_ptr = p;
     int *data = key_data;
-    printf("Freeing %d(%p) from mempool\n", *data, data);
+    //printf("Freeing %d(%p) from mempool\n", *data, data);
     //WRITER_DEBUG("Freeing %d(%p) from mempool", *data, data);
     rte_mempool_put(value_pool, key_data);
 }
@@ -179,7 +179,7 @@ populate_hash_table(const struct rte_hash *h, uint16_t num_entries, struct mempo
             rte_exit(EXIT_FAILURE, "Unable to add entry %"PRIu16" in the hash table \n", dst);
         else
             total++;
-        printf("Added key %d with data %d(%p) in hash table. \n", dst, to_add->t, to_add);
+        //printf("Added key %d with data %d(%p) in hash table. \n", dst, to_add->t, to_add);
     }
     printf("Total number of keys added is %"PRIu16"\n", total);
 }
@@ -284,7 +284,7 @@ lcore_stat(__rte_unused void *arg)
         sleep(1); // report stats every second
         printf("Number of data packets received %"PRIu64 "\n", rx_count);
         printf("Number of data packets transmitted %"PRIu64 "\n", tx_count);
-        //printf("Number of control packets received %"PRIu64 "\n", rx_count_control);
+        printf("Number of control packets received %"PRIu64 "\n", rx_count_control);
     }
 }
 
@@ -368,7 +368,7 @@ void my_receive(struct receive_params *p)
         uint64_t now = rte_rdtsc_precise();
         for(int i = 0; i < nb_rx; i++)
         {
-            rte_rcu_qsbr_lock(qv, reader_id);
+            //rte_rcu_qsbr_lock(qv, reader_id);
             my_pkt = rte_pktmbuf_mtod(bufs[i], struct my_message *);
             eth_type = rte_be_to_cpu_16(my_pkt->eth_hdr.ether_type);
             
@@ -388,7 +388,7 @@ void my_receive(struct receive_params *p)
             rte_ether_addr_copy(&src_mac_addr, &my_pkt->eth_hdr.s_addr);
             rte_ether_addr_copy(&value_pointer->dest_mac_addr, &my_pkt->eth_hdr.d_addr);
             rte_mempool_put(value_pool, value_pointer);
-            rte_rcu_qsbr_unlock(qv, reader_id);
+            //rte_rcu_qsbr_unlock(qv, reader_id);
             rte_rcu_qsbr_quiescent(qv, reader_id);
         }
         
@@ -461,7 +461,7 @@ receive_control(struct receive_params *p)
             {
                 rx_count_control += 1;
                 key = ctrl->dst_addr;
-                printf("Updating for key %d\n", key);
+                //printf("Updating for key %d\n", key);
                 retval = rte_mempool_get(value_pool, (void**)&next_val);
                 if (retval != 0) {
                     rte_exit(EXIT_FAILURE, "Unable to get entry from the value pool \n");
@@ -597,18 +597,18 @@ main(int argc, char *argv[])
     lcore_id = rte_get_next_lcore(-1, 1, 0);
     if(lcore_id == RTE_MAX_LCORE)
     {
-        rte_exit(EXIT_FAILURE, "Slave core id required!");
+        rte_exit(EXIT_FAILURE, "Slave core id required!"); 
     }
-    rte_eal_remote_launch(lcore_stat, NULL, lcore_id);
+    rte_eal_remote_launch((lcore_function_t *)my_receive, &data, lcore_id);//on lcore 4
     
     lcore_id = rte_get_next_lcore(lcore_id, 1, 0);
     if(lcore_id == RTE_MAX_LCORE)
     {
         rte_exit(EXIT_FAILURE, "Slave core id required!");
     }
-    rte_eal_remote_launch(my_receive, &data, lcore_id);
+    rte_eal_remote_launch(lcore_stat, NULL, lcore_id); //on lcore 6
     
-    receive_control(&control);
+    receive_control(&control); //on lcore 2
     rte_eal_mp_wait_lcore();
 
     return 0;
