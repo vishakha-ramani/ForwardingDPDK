@@ -28,10 +28,10 @@
 
 #define NUM_MBUFS ((64*1024)-1)
 #define MBUF_CACHE_SIZE 250
-#define BURST_SIZE 256
+#define BURST_SIZE 16
 #define PTP_PROTOCOL 0x88F7
 #define HASH_ENTRIES 1024
-#define CONTROL_BURST_SIZE 256
+#define CONTROL_BURST_SIZE 8
 uint64_t rx_count; // global variable to keep track of the number of received packets (to be displayed every second)
 uint64_t tx_count;
 uint64_t rx_count_control;
@@ -269,8 +269,8 @@ port_init(uint16_t port, struct rte_mempool *mbuf_pool)
 		return retval;
         
         /* RX and TX callbacks are added to the ports. 8< */
-	rte_eth_add_rx_callback(0, 0, add_timestamps, NULL);
-	rte_eth_add_tx_callback(0, 0, calc_latency, NULL);
+//	rte_eth_add_rx_callback(0, 0, add_timestamps, NULL);
+//	rte_eth_add_tx_callback(0, 0, calc_latency, NULL);
 	/* >8 End of RX and TX callbacks. */
 
 	return 0;
@@ -398,13 +398,13 @@ void my_receive(struct receive_params *p)
         totalpackets += nb_rx;
         totalbatches += 1;
         
-        if (totalpackets > (100 * 1000)) {
-        printf("Latency = %"PRIu64" cycles %"PRIu64" number\n",
-        totalcycles / totalpackets, totalpackets/totalbatches);
-        totalcycles = 0;
-        totalpackets = 0;
-        totalbatches = 0;
-        }
+//        if (totalpackets > (100 * 1000)) {
+//        printf("Latency = %"PRIu64" cycles %"PRIu64" number\n",
+//        totalcycles / totalpackets, totalpackets/totalbatches);
+//        totalcycles = 0;
+//        totalpackets = 0;
+//        totalbatches = 0;
+//        }
 
         const uint16_t nb_tx = rte_eth_tx_burst(port, 0, bufs, nb_rx);
         tx_count = tx_count + nb_tx;
@@ -454,28 +454,29 @@ receive_control(struct receive_params *p)
         {
             ctrl = rte_pktmbuf_mtod(bufs[i], struct control_message *);
             eth_type = rte_be_to_cpu_16(ctrl->eth_hdr.ether_type);
+            
+            if ((unlikely(eth_type!=PTP_PROTOCOL)))
+                continue;
 
-            /* Check for control packet of interest and ignore other broadcasts 
-             messages */
-            if(likely(eth_type == PTP_PROTOCOL))
-            {
-                rx_count_control += 1;
-                key = ctrl->dst_addr;
-                //printf("Updating for key %d\n", key);
-                retval = rte_mempool_get(value_pool, (void**)&next_val);
-                if (retval != 0) {
-                    rte_exit(EXIT_FAILURE, "Unable to get entry from the value pool \n");
-                }
-                rte_ether_addr_copy(&ctrl->eth_hdr.s_addr, &next_val->dest_mac_addr);
-                memcpy(&next_val->t, &ctrl->t, sizeof(uint64_t));
-                retval = rte_hash_add_key_data(handle, (void*)&key, (void*)next_val);
-                rte_mempool_put(value_pool, next_val);
-                if(unlikely(retval < 0)){
-                    rte_exit(EXIT_FAILURE, "Unable to add entry %"PRIu16
-                            "in the hash table \n", key);
-                    continue;
-                }      
+            //if(i==nb_rx/2)
+              printf("Received \033[;35mcotrol\033[0m timestamp %"PRIu64"\n", ctrl->t);
+            rx_count_control += 1;
+            key = ctrl->dst_addr;
+            //printf("Updating for key %d\n", key);
+            retval = rte_mempool_get(value_pool, (void**)&next_val);
+            if (retval != 0) {
+                rte_exit(EXIT_FAILURE, "Unable to get entry from the value pool \n");
             }
+            rte_ether_addr_copy(&ctrl->eth_hdr.s_addr, &next_val->dest_mac_addr);
+            memcpy(&next_val->t, &ctrl->t, sizeof(uint64_t));
+            retval = rte_hash_add_key_data(handle, (void*)&key, (void*)next_val);
+            rte_mempool_put(value_pool, next_val);
+            if(unlikely(retval < 0)){
+                rte_exit(EXIT_FAILURE, "Unable to add entry %"PRIu16
+                        "in the hash table \n", key);
+                continue;
+            }      
+
             rte_pktmbuf_free(bufs[i]);
         }  
     }
