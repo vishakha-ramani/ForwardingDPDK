@@ -22,12 +22,17 @@
 #define NUM_MBUFS ((64*1024)-1)
 #define MBUF_CACHE_SIZE 250
 #define BURST_SIZE 256
-#define CONTROL_BURST_SIZE 256
+#define CONTROL_BURST_SIZE 8
 #define PTP_PROTOCOL 0x88F7
+#define HASH_ENTRIES 1024
 uint64_t rx_count;
 uint64_t startTime;
 uint64_t cyclesSum;
-uint64_t ctrlnow;
+uint64_t ctrlnow[HASH_ENTRIES];
+uint64_t data_sent;
+uint64_t control_sent;
+uint16_t num_batches;
+
 
 static struct rte_mempool *mbuf_pool;
 
@@ -134,7 +139,7 @@ lcore_stat(__rte_unused void *arg)
     for(; ;)
     {
         sleep(1); // report stats every second
-        printf("Number of packets received %"PRIu64 "\n", rx_count);
+        printf("Number of \033[;32mdata\033[0m packets received %"PRIu64 "\n", rx_count);
     }
 }
 
@@ -166,6 +171,7 @@ void my_receive()
     uint64_t totalcycles = 0;
     uint64_t totalpackets = 0;
     uint64_t totalbatches = 0;
+    uint16_t destAddr;
     
     //printf("Measured frequency of receive machine is %"PRIu64"\n", rte_get_tsc_hz());
     
@@ -196,7 +202,8 @@ void my_receive()
             if(unlikely(eth_type != PTP_PROTOCOL))
                 continue;
             
-            if(unlikely(my_pkt->t != ctrlnow))
+            destAddr = my_pkt->dst_addr;
+            if(unlikely(my_pkt->t != ctrlnow[100-destAddr]))
                 continue;
             rx_count = rx_count + 1;
             /* get timestamp of address update*/
@@ -238,8 +245,9 @@ my_send(struct send_params *p)
     struct my_message *my_pkt;
     
     uint16_t rand;
-    int j=0;
+    data_sent=0;
     uint16_t sent_packets = BURST_SIZE;
+
     
     //printf("Measured frequency of data packet sending machine is %"PRIu64"\n", rte_get_tsc_hz());
 
@@ -248,11 +256,12 @@ my_send(struct send_params *p)
         /* Adding same timestamp to a batch of packets*/
         now = rte_rdtsc_precise();
         
-        //rand = 100 + rte_rand()%10;
+        rand = 100 + rte_rand()%(HASH_ENTRIES-100+1);
         
         for(int i = 0; i < sent_packets; i ++)
         {
             seq_num = seq_num + 1;
+            //rand = 100 + rte_rand()%(HASH_ENTRIES-100+1);
             bufs[i] = rte_pktmbuf_alloc(mbuf_pool);
             if (unlikely(bufs[i] == NULL)) {
                 printf("Couldn't "
@@ -267,7 +276,8 @@ my_send(struct send_params *p)
             my_pkt->T = now; //add timestamp to data packet
             my_pkt->t = 0; // empty timestamp of control packet
             my_pkt->seqNo = seq_num;
-            my_pkt->dst_addr = 101;
+            //my_pkt->dst_addr = 101;
+            my_pkt->dst_addr = rand;
             my_pkt->type = 1;
 
             rte_ether_addr_copy(&src_mac_addr, &my_pkt->eth_hdr.s_addr);
@@ -276,16 +286,18 @@ my_send(struct send_params *p)
             int pkt_size = sizeof(struct my_message);
             bufs[i]->pkt_len = pkt_size;
             bufs[i]->data_len = pkt_size;
+            //printf("Sent \033[;32mdata\033[0m packets with destination address %"PRIu32"\n", rand);
         }
 
         sent_packets = rte_eth_tx_burst(port, queue_id, bufs, BURST_SIZE);
-        j = j + sent_packets;
+        data_sent = data_sent + sent_packets;
+        num_batches+=1;
         //rte_delay_ms(1);
         //printf("Sent data packets with destination address %"PRIu32"\n", rand);
     }
-    while(j < max_packets);
+    while(data_sent < max_packets);
     
-    printf("\nNumber of data packets transmitted by logical core % "PRId64 " is %"PRId64 "\n", rte_lcore_id(), j);
+    printf("\nNumber of \033[;32mdata\033[0m packets transmitted by logical core % "PRId64 " is %"PRId64 "\n", rte_lcore_id(), data_sent);
     
         /* Free any unsent packets. */
     if (unlikely(sent_packets < BURST_SIZE)) {
@@ -312,17 +324,20 @@ send_control(struct send_params *p)
     retval = rte_eth_macaddr_get(port, &src_mac_addr); // get MAC address of Port 0 on node1-1
     struct rte_ether_addr dst_mac_addr = {{0x98,0x03,0x9b,0x32,0x7d,0x33}}; //MAC address 98:03:9b:32:7d:33
     struct control_message *ctrl;
-    //uint64_t ctrlnow;
+    uint64_t ctrlTS; //timestamp of control packet (ctrlnow tracks the TS for each address)
     
     //printf("Measured frequency of control packet sending machine is %"PRIu64"\n", rte_get_tsc_hz());
     
     uint16_t rand;
     //printf("Random number generated is %"PRIu32"\n", rand);
-    int j=0;
+    control_sent=0;
     uint16_t sent_packets = CONTROL_BURST_SIZE;
-    do{
-        ctrlnow = rte_rdtsc();
+    do{        
         //rand = 100 + rte_rand()%10;
+        ctrlTS = rte_rdtsc();
+        rand = 100 + rte_rand()%(HASH_ENTRIES-100+1);
+        while(num_batches%4)
+            rte_pause();
         
         for(int i = 0; i < sent_packets; i ++)
         {
@@ -334,26 +349,28 @@ send_control(struct send_params *p)
             }
             ctrl = rte_pktmbuf_mtod(bufs[i], struct control_message*);
             ctrl->type = 2;
-            ctrl->t = ctrlnow;
-            rand = 100 + rte_rand()%10;
-            //ctrl->dst_addr = rand;
-            ctrl->dst_addr = 101;
+            ctrl->t = ctrlTS;
+            //rand = 100 + rte_rand()%(HASH_ENTRIES-100+1);
+            ctrl->dst_addr = rand;
+            ctrlnow[rand-100] = ctrlTS;
+            //ctrl->dst_addr = 101;
             rte_ether_addr_copy(&src_mac_addr, &ctrl->eth_hdr.s_addr);
             rte_ether_addr_copy(&dst_mac_addr, &ctrl->eth_hdr.d_addr);
             ctrl->eth_hdr.ether_type = htons(PTP_PROTOCOL);
             int pkt_size = sizeof(struct control_message);
             bufs[i]->pkt_len = pkt_size;
             bufs[i]->data_len = pkt_size;
+            //printf("Sent \033[;35mcotrol\033[0mtimestamp %"PRIu64" for destination %"PRIu32"\n", ctrlTS, rand);
         }
         sent_packets = rte_eth_tx_burst(port, queue_id, bufs, CONTROL_BURST_SIZE);
-        printf("Sent \033[;35mcotrol\033[0m timestamp %"PRIu64"\n", ctrlnow);
-        //printf("Sent cotrol timestamp %"PRIu64" for destination %"PRIu32"\n", ctrlnow, rand);
-        j = j + sent_packets;
-        rte_delay_ms(1);
+        if (sent_packets!=0)
+            printf("Sent \033[;35mcotrol\033[0m timestamp %"PRIu64" for destination %"PRIu32"\n", ctrlTS, rand);
+        control_sent = control_sent + sent_packets;
+        //rte_delay_ms(1);
     }
-    while(j < max_packets);
+    while(control_sent < max_packets);
     
-    printf("\nNumber of control packets transmitted by logical core % "PRId64 " is %"PRId64 "\n", rte_lcore_id(), j);
+    printf("\nNumber of control packets transmitted by logical core % "PRId64 " is %"PRId64 "\n", rte_lcore_id(), control_sent);
     
     /* Free any unsent packets. */
     if (unlikely(sent_packets < CONTROL_BURST_SIZE)) {
@@ -376,8 +393,10 @@ main(int argc, char *argv[])
     unsigned nb_ports;
     uint16_t portid;
     uint16_t port;
-    uint64_t max_packets = BURST_SIZE*4096; // = 1048576
-    uint64_t num_control = CONTROL_BURST_SIZE*10; // number of control updates
+    uint64_t num_data = BURST_SIZE*4; 
+    uint64_t num_control = CONTROL_BURST_SIZE*4;
+    //uint64_t max_packets = BURST_SIZE*4096; // = 1048576
+    //uint64_t num_control = CONTROL_BURST_SIZE*1; // number of control updates
     unsigned lcore_id;
 
     /* Initialize the Environment Abstraction Layer (EAL). */
@@ -418,7 +437,7 @@ main(int argc, char *argv[])
                                     "not be optimal.\n", port);
     
 
-    struct send_params data2 = {mbuf_pool, 0, 0, max_packets};
+    struct send_params data2 = {mbuf_pool, 0, 0, num_data};
     struct send_params control = {mbuf_pool, 1, 0, num_control};
 
     /* call my_send function on another lcore*/
