@@ -22,7 +22,7 @@
 #define NUM_MBUFS ((64*1024)-1)
 #define MBUF_CACHE_SIZE 250
 #define BURST_SIZE 256
-#define CONTROL_BURST_SIZE 8
+#define CONTROL_BURST_SIZE 256
 #define PTP_PROTOCOL 0x88F7
 uint64_t rx_count;
 uint64_t startTime;
@@ -210,7 +210,7 @@ void my_receive()
         
         totalbatches += 1;
         if (totalpackets > (100 * 1000)) {
-            printf("Latency = %"PRIu64" cycles %"PRIu64" pkts per batch\nAverage ",
+            printf("Latency = %"PRIu64" cycles %"PRIu64" pkts per batch\n",
             totalcycles / totalpackets, totalpackets/totalbatches);
             totalcycles = 0;
             totalpackets = 0;
@@ -375,8 +375,8 @@ main(int argc, char *argv[])
     unsigned nb_ports;
     uint16_t portid;
     uint16_t port;
-    uint64_t max_packets = 1000;
-    uint64_t num_control = 10; // number of control updates
+    uint64_t max_packets = BURST_SIZE*4096; // = 1048576
+    uint64_t num_control = CONTROL_BURST_SIZE*6; // number of control updates
     unsigned lcore_id;
 
     /* Initialize the Environment Abstraction Layer (EAL). */
@@ -426,7 +426,7 @@ main(int argc, char *argv[])
     {
         rte_exit(EXIT_FAILURE, "Slave core id required!");
     }
-    rte_eal_remote_launch((lcore_function_t *)my_send, &data2, lcore_id);
+    rte_eal_remote_launch((lcore_function_t *)my_send, &data2, lcore_id); //on lcore 4
     
     
     lcore_id = rte_get_next_lcore(lcore_id, 1, 0);
@@ -434,7 +434,7 @@ main(int argc, char *argv[])
     {
         rte_exit(EXIT_FAILURE, "Slave core id required!");
     }
-    //rte_eal_remote_launch((lcore_function_t *)send_control, &control, lcore_id);
+    rte_eal_remote_launch((lcore_function_t *)send_control, &control, lcore_id); //on lcore 6
     
     /* call lcore stat on another lcore*/
     lcore_id = rte_get_next_lcore(lcore_id, 1, 0);
@@ -442,9 +442,8 @@ main(int argc, char *argv[])
     {
         rte_exit(EXIT_FAILURE, "Slave core id required!");
     }
-    rte_eal_remote_launch(lcore_stat, NULL, lcore_id);
-
+    rte_eal_remote_launch(lcore_stat, NULL, lcore_id); //on lcore 8
    
-    my_receive();
+    my_receive(); //on lcore2
     return 0;
 }
