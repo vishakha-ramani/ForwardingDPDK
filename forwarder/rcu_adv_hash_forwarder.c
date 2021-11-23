@@ -162,7 +162,7 @@ populate_hash_table(const struct rte_hash *h, uint16_t num_entries, struct mempo
     uint16_t i;
     uint16_t dst; // destination address
     uint16_t total = 0;
-    struct value template = {{{0x98,0x03,0x9b,0x32,0x8d,0xda}}, 0};
+    struct value template = {{{0x1c,0x34,0xda,0x42,0x0c,0x3c}}, 0}; //1c:34:da:42:0c:3c
     struct value *to_add;
     
     for(i = 0; i < num_entries; i++)
@@ -459,7 +459,7 @@ receive_control(struct receive_params *p)
                 continue;
 
             //if(i==nb_rx/2)
-              printf("Received \033[;35mcotrol\033[0m timestamp %"PRIu64"\n", ctrl->t);
+              //printf("Received \033[;35mcotrol\033[0m timestamp %"PRIu64"\n", ctrl->t);
             rx_count_control += 1;
             key = ctrl->dst_addr;
             //printf("Updating for key %d\n", key);
