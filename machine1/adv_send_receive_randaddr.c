@@ -22,7 +22,7 @@
 #define NUM_MBUFS ((64*1024)-1)
 #define MBUF_CACHE_SIZE 250
 #define BURST_SIZE 256
-#define CONTROL_BURST_SIZE 8
+#define CONTROL_BURST_SIZE 1
 #define PTP_PROTOCOL 0x88F7
 #define HASH_ENTRIES 1024
 uint64_t rx_count;
@@ -216,13 +216,13 @@ void my_receive()
         }
         
         totalbatches += 1;
-//        if (totalpackets > (100 * 1000)) {
-//            printf("Latency = %"PRIu64" cycles %"PRIu64" pkts per batch\n",
-//            totalcycles / totalpackets, totalpackets/totalbatches);
-//            totalcycles = 0;
-//            totalpackets = 0;
-//            totalbatches = 0;
-//        }
+        if (totalpackets > (100 * 1000)) {
+            printf("Latency = %"PRIu64" cycles %"PRIu64" pkts per batch\n",
+            totalcycles / totalpackets, totalpackets/totalbatches);
+            totalcycles = 0;
+            totalpackets = 0;
+            totalbatches = 0;
+        }
     }
 }
 
@@ -241,7 +241,7 @@ my_send(struct send_params *p)
     struct rte_mbuf *bufs[BURST_SIZE];
     struct rte_ether_addr src_mac_addr;
     retval = rte_eth_macaddr_get(port, &src_mac_addr); // get MAC address of Port 0 on node1-1
-    struct rte_ether_addr dst_mac_addr = {{0x98,0x03,0x9b,0x32,0x7d,0x32}}; //MAC address 98:03:9b:32:7d:32
+    struct rte_ether_addr dst_mac_addr = {{0xb8,0x59,0x9f,0xdd,0xbd,0x94}}; //MAC address 98:03:9b:32:7d:32 //b8:59:9f:dd:bd:94
     struct my_message *my_pkt;
     
     uint16_t rand;
@@ -322,7 +322,7 @@ send_control(struct send_params *p)
     struct rte_mbuf *bufs[CONTROL_BURST_SIZE];
     struct rte_ether_addr src_mac_addr;
     retval = rte_eth_macaddr_get(port, &src_mac_addr); // get MAC address of Port 0 on node1-1
-    struct rte_ether_addr dst_mac_addr = {{0x98,0x03,0x9b,0x32,0x7d,0x33}}; //MAC address 98:03:9b:32:7d:33
+    struct rte_ether_addr dst_mac_addr = {{0xb8,0x59,0x9f,0xdd,0xbd,0x95}}; //MAC address 98:03:9b:32:7d:33 // b8:59:9f:dd:bd:95
     struct control_message *ctrl;
     uint64_t ctrlTS; //timestamp of control packet (ctrlnow tracks the TS for each address)
     
@@ -363,10 +363,10 @@ send_control(struct send_params *p)
             //printf("Sent \033[;35mcotrol\033[0mtimestamp %"PRIu64" for destination %"PRIu32"\n", ctrlTS, rand);
         }
         sent_packets = rte_eth_tx_burst(port, queue_id, bufs, CONTROL_BURST_SIZE);
-        if (sent_packets!=0)
-            printf("Sent \033[;35mcotrol\033[0m timestamp %"PRIu64" for destination %"PRIu32"\n", ctrlTS, rand);
+//        if (sent_packets!=0)
+//            printf("Sent \033[;35mcotrol\033[0m timestamp %"PRIu64" for destination %"PRIu32"\n", ctrlTS, rand);
         control_sent = control_sent + sent_packets;
-        //rte_delay_ms(1);
+        rte_delay_ms(1);
     }
     while(control_sent < max_packets);
     
@@ -393,10 +393,10 @@ main(int argc, char *argv[])
     unsigned nb_ports;
     uint16_t portid;
     uint16_t port;
-    uint64_t num_data = BURST_SIZE*4; 
-    uint64_t num_control = CONTROL_BURST_SIZE*4;
-    //uint64_t max_packets = BURST_SIZE*4096; // = 1048576
-    //uint64_t num_control = CONTROL_BURST_SIZE*1; // number of control updates
+//    uint64_t num_data = BURST_SIZE*4; 
+//    uint64_t num_control = CONTROL_BURST_SIZE*4;
+    uint64_t num_data = BURST_SIZE*4096; // = 1048576
+    uint64_t num_control = CONTROL_BURST_SIZE*100000; // number of control updates
     unsigned lcore_id;
 
     /* Initialize the Environment Abstraction Layer (EAL). */
@@ -454,7 +454,7 @@ main(int argc, char *argv[])
     {
         rte_exit(EXIT_FAILURE, "Slave core id required!");
     }
-    rte_eal_remote_launch((lcore_function_t *)send_control, &control, lcore_id); //on lcore 6
+    //rte_eal_remote_launch((lcore_function_t *)send_control, &control, lcore_id); //on lcore 6
     
     /* call lcore stat on another lcore*/
     lcore_id = rte_get_next_lcore(lcore_id, 1, 0);
