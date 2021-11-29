@@ -15,13 +15,14 @@
 #include <sys/time.h>
 #include <rte_time.h>
 #include <rte_random.h>
+#include <getopt.h>
 
 #define RX_RING_SIZE 1024
 #define TX_RING_SIZE 1024
 
 #define NUM_MBUFS ((64*1024)-1)
 #define MBUF_CACHE_SIZE 250
-#define BURST_SIZE 4
+#define BURST_SIZE 256
 #define CONTROL_BURST_SIZE 64
 #define PTP_PROTOCOL 0x88F7
 #define HASH_ENTRIES 1024
@@ -49,6 +50,73 @@ struct send_params{
     uint16_t queue_id;
     uint64_t max_packets;
 };
+
+
+/* Rx/Tx callbacks variables - HW timestamping is not included since 
+ * rte_mbuf_timestamp_t was not recognized. */
+typedef uint64_t tsc_t;
+static int tsc_dynfield_offset = -1;
+
+static inline tsc_t *
+tsc_field(struct rte_mbuf *mbuf)
+{
+    return RTE_MBUF_DYNFIELD(mbuf, tsc_dynfield_offset, tsc_t *);
+}
+
+static struct {
+    uint64_t total_cycles;
+    uint64_t total_queue_cycles;
+    uint64_t total_pkts;
+} latency_numbers;
+
+#define TICKS_PER_CYCLE_SHIFT 16
+static uint64_t ticks_per_cycle_mult;
+
+/* Callback added to the RX port and applied to packets. 8< */
+static uint16_t
+add_timestamps(uint16_t port __rte_unused, uint16_t qidx __rte_unused,
+        struct rte_mbuf **pkts, uint16_t nb_pkts,
+        uint16_t max_pkts __rte_unused, void *_ __rte_unused)
+{
+    unsigned i;
+    uint64_t now = rte_rdtsc();
+    
+    for (i = 0; i < nb_pkts; i++)
+        *tsc_field(pkts[i]) = now;
+    return nb_pkts;
+}
+/* >8 End of callback addition and application. */
+
+/* Callback is added to the TX port. 8< */
+static uint16_t
+calc_latency(uint16_t port, uint16_t qidx __rte_unused,
+        struct rte_mbuf **pkts, uint16_t nb_pkts, void *_ __rte_unused)
+{   
+    static uint64_t totalbatches = 0;
+    uint64_t cycles = 0;
+    uint64_t queue_ticks = 0;
+    uint64_t now = rte_rdtsc();
+    uint64_t ticks;
+    unsigned i;
+    for (i = 0; i < nb_pkts; i++) {
+        cycles += now - *tsc_field(pkts[i]);
+    }
+    latency_numbers.total_cycles += cycles;
+    latency_numbers.total_pkts += nb_pkts;
+    totalbatches += 1;
+    if (latency_numbers.total_pkts > (100 * 1000)) {
+        printf("Latency = %"PRIu64" cycles %" PRIu64 " number\n",
+        latency_numbers.total_cycles / latency_numbers.total_pkts, latency_numbers.total_pkts /totalbatches);
+        latency_numbers.total_cycles = 0;
+        latency_numbers.total_queue_cycles = 0;
+        latency_numbers.total_pkts = 0;
+        totalbatches = 0;
+    }
+    return nb_pkts;
+}
+/* >8 End of callback addition. */
+
+
 
 
 /*
@@ -130,6 +198,11 @@ port_init(uint16_t port, struct rte_mempool *mbuf_pool)
         retval = rte_eth_promiscuous_enable(port);
         if (retval != 0)
                 return retval;
+        
+        /* RX and TX callbacks are added to the ports. 8< */
+	rte_eth_add_tx_callback(0, 0, add_timestamps, NULL);
+	rte_eth_add_rx_callback(0, 0, calc_latency, NULL);
+	/* >8 End of RX and TX callbacks. */
 
         return 0;
 }
@@ -218,14 +291,14 @@ void my_receive()
         if(likely(checkPkt > 0))
             totalbatches += 1;
         
-        //printf("Total packets = %"PRIu64" Total batches = %"PRIu64"\n", totalpackets, totalbatches);
-        if (totalpackets > (100 *100)) {
-            printf("Latency = %"PRIu64" cycles %"PRIu64" pkts per batch\n",
-            totalcycles / totalpackets, totalpackets/totalbatches);
-            totalcycles = 0;
-            totalpackets = 0;
-            totalbatches = 0;
-        }
+//        //printf("Total packets = %"PRIu64" Total batches = %"PRIu64"\n", totalpackets, totalbatches);
+//        if (totalpackets > (100 *100)) {
+//            printf("Latency = %"PRIu64" cycles %"PRIu64" pkts per batch\n",
+//            totalcycles / totalpackets, totalpackets/totalbatches);
+//            totalcycles = 0;
+//            totalpackets = 0;
+//            totalbatches = 0;
+//        }
     }
 }
 
@@ -300,7 +373,7 @@ my_send(struct send_params *p)
         num_batches+=1;
         globalSent += sent_packets;
         
-        rte_delay_ms(100);
+        //rte_delay_ms(100);
         //printf("Sent data packets with destination address %"PRIu32"\n", rand);
     }
     while(data_sent < max_packets);
@@ -406,6 +479,21 @@ main(int argc, char *argv[])
     uint64_t num_data = 1048576; //BURST_SIZE*4096; // = 1048576
     uint64_t num_control = CONTROL_BURST_SIZE*100000; // number of control updates
     unsigned lcore_id;
+    
+    
+    struct option lgopts[] = {
+    { NULL,  0, 0, 0 }
+    };
+    int opt, option_index;
+    
+    static const struct rte_mbuf_dynfield tsc_dynfield_desc = {
+        .name = "example_bbdev_dynfield_tsc",
+        .size = sizeof(tsc_t),
+        .align = __alignof__(tsc_t),
+    };
+
+    
+    
 
     /* Initialize the Environment Abstraction Layer (EAL). */
     int ret = rte_eal_init(argc, argv);
@@ -415,6 +503,8 @@ main(int argc, char *argv[])
     argc -= ret;
     argv += ret;
 
+     optind = 1; /* reset getopt lib */
+    
     nb_ports = rte_eth_dev_count_avail();
     printf("Number of ports available %"PRIu16 "\n", nb_ports);
     
@@ -424,6 +514,11 @@ main(int argc, char *argv[])
 
     if (mbuf_pool == NULL)
             rte_exit(EXIT_FAILURE, "Cannot create mbuf pool\n");
+    
+    
+    tsc_dynfield_offset = rte_mbuf_dynfield_register(&tsc_dynfield_desc);
+    if (tsc_dynfield_offset < 0)
+        rte_exit(EXIT_FAILURE, "Cannot register mbuf field\n");
 
     /* Initialize all ports. */
     RTE_ETH_FOREACH_DEV(portid)

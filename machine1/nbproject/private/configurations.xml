@@ -5,6 +5,7 @@
       <df name="build">
       </df>
       <in>adv_send_receive.c</in>
+      <in>adv_send_receive_callback.c</in>
       <in>adv_send_receive_randaddr.c</in>
       <in>basic_send_receive.c</in>
     </df>
