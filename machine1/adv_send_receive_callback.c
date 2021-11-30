@@ -74,24 +74,10 @@ static uint64_t ticks_per_cycle_mult;
 
 /* Callback added to the RX port and applied to packets. 8< */
 static uint16_t
-add_timestamps(uint16_t port __rte_unused, uint16_t qidx __rte_unused,
+calc_latency(uint16_t port __rte_unused, uint16_t qidx __rte_unused,
         struct rte_mbuf **pkts, uint16_t nb_pkts,
         uint16_t max_pkts __rte_unused, void *_ __rte_unused)
 {
-    unsigned i;
-    uint64_t now = rte_rdtsc();
-    
-    for (i = 0; i < nb_pkts; i++)
-        *tsc_field(pkts[i]) = now;
-    return nb_pkts;
-}
-/* >8 End of callback addition and application. */
-
-/* Callback is added to the TX port. 8< */
-static uint16_t
-calc_latency(uint16_t port, uint16_t qidx __rte_unused,
-        struct rte_mbuf **pkts, uint16_t nb_pkts, void *_ __rte_unused)
-{   
     static uint64_t totalbatches = 0;
     uint64_t cycles = 0;
     uint64_t queue_ticks = 0;
@@ -105,13 +91,27 @@ calc_latency(uint16_t port, uint16_t qidx __rte_unused,
     latency_numbers.total_pkts += nb_pkts;
     totalbatches += 1;
     if (latency_numbers.total_pkts > (100 * 1000)) {
-        printf("Latency = %"PRIu64" cycles %" PRIu64 " number\n",
+        printf("Latency = %"PRIu64" cycles/pkt %" PRIu64 " pkts/batch\n",
         latency_numbers.total_cycles / latency_numbers.total_pkts, latency_numbers.total_pkts /totalbatches);
         latency_numbers.total_cycles = 0;
         latency_numbers.total_queue_cycles = 0;
         latency_numbers.total_pkts = 0;
         totalbatches = 0;
     }
+    return nb_pkts; 
+}
+/* >8 End of callback addition and application. */
+
+/* Callback is added to the TX port. 8< */
+static uint16_t
+add_timestamps(uint16_t port, uint16_t qidx __rte_unused,
+        struct rte_mbuf **pkts, uint16_t nb_pkts, void *_ __rte_unused)
+{   
+    unsigned i;
+    uint64_t now = rte_rdtsc();
+    
+    for (i = 0; i < nb_pkts; i++)
+        *tsc_field(pkts[i]) = now;
     return nb_pkts;
 }
 /* >8 End of callback addition. */
@@ -249,7 +249,7 @@ void my_receive()
     uint16_t destAddr;
     uint16_t checkPkt;
     
-    //printf("Measured frequency of receive machine is %"PRIu64"\n", rte_get_tsc_hz());
+    printf("Measured frequency of receive machine is %"PRIu64"\n", rte_get_tsc_hz());
     
     printf("\nCore %u receiving packets. [Ctrl+C to quit]\n", rte_lcore_id());
     
@@ -292,7 +292,7 @@ void my_receive()
             totalbatches += 1;
         
 //        //printf("Total packets = %"PRIu64" Total batches = %"PRIu64"\n", totalpackets, totalbatches);
-//        if (totalpackets > (100 *100)) {
+//        if (totalpackets > (100 *1000)) {
 //            printf("Latency = %"PRIu64" cycles %"PRIu64" pkts per batch\n",
 //            totalcycles / totalpackets, totalpackets/totalbatches);
 //            totalcycles = 0;
@@ -503,7 +503,7 @@ main(int argc, char *argv[])
     argc -= ret;
     argv += ret;
 
-     optind = 1; /* reset getopt lib */
+    optind = 1; /* reset getopt lib */
     
     nb_ports = rte_eth_dev_count_avail();
     printf("Number of ports available %"PRIu16 "\n", nb_ports);
