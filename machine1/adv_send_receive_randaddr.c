@@ -244,7 +244,7 @@ my_send(struct send_params *p)
     struct rte_mbuf *bufs[BURST_SIZE];
     struct rte_ether_addr src_mac_addr;
     retval = rte_eth_macaddr_get(port, &src_mac_addr); // get MAC address of Port 0 on node1-1
-    struct rte_ether_addr dst_mac_addr = {{0xb8,0x59,0x9f,0xdd,0xbd,0x94}}; //MAC address 98:03:9b:32:7d:32 //b8:59:9f:dd:bd:94
+    struct rte_ether_addr dst_mac_addr = {{0x98,0x03,0x9b,0x32,0x7d,0x32}}; //MAC address 98:03:9b:32:7d:32 //b8:59:9f:dd:bd:94
     struct my_message *my_pkt;
     
     uint16_t rand;
@@ -300,7 +300,7 @@ my_send(struct send_params *p)
         num_batches+=1;
         globalSent += sent_packets;
         
-        rte_delay_ms(100);
+        //rte_delay_ms(100);
         //printf("Sent data packets with destination address %"PRIu32"\n", rand);
     }
     while(data_sent < max_packets);

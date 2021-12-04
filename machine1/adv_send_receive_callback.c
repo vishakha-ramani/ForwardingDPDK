@@ -18,11 +18,11 @@
 #include <getopt.h>
 
 #define RX_RING_SIZE 1024
-#define TX_RING_SIZE 1024
+#define TX_RING_SIZE 256
 
 #define NUM_MBUFS ((64*1024)-1)
 #define MBUF_CACHE_SIZE 250
-#define BURST_SIZE 256
+#define BURST_SIZE 4
 #define CONTROL_BURST_SIZE 64
 #define PTP_PROTOCOL 0x88F7
 #define HASH_ENTRIES 1024
@@ -291,14 +291,14 @@ void my_receive()
         if(likely(checkPkt > 0))
             totalbatches += 1;
         
-//        //printf("Total packets = %"PRIu64" Total batches = %"PRIu64"\n", totalpackets, totalbatches);
-//        if (totalpackets > (100 *1000)) {
-//            printf("Latency = %"PRIu64" cycles %"PRIu64" pkts per batch\n",
-//            totalcycles / totalpackets, totalpackets/totalbatches);
-//            totalcycles = 0;
-//            totalpackets = 0;
-//            totalbatches = 0;
-//        }
+        //printf("Total packets = %"PRIu64" Total batches = %"PRIu64"\n", totalpackets, totalbatches);
+        if (totalpackets > (100 *1000)) {
+            printf("Latency = %"PRIu64" cycles %"PRIu64" pkts per batch\n",
+            totalcycles / totalpackets, totalpackets/totalbatches);
+            totalcycles = 0;
+            totalpackets = 0;
+            totalbatches = 0;
+        }
     }
 }
 
@@ -317,7 +317,7 @@ my_send(struct send_params *p)
     struct rte_mbuf *bufs[BURST_SIZE];
     struct rte_ether_addr src_mac_addr;
     retval = rte_eth_macaddr_get(port, &src_mac_addr); // get MAC address of Port 0 on node1-1
-    struct rte_ether_addr dst_mac_addr = {{0xb8,0x59,0x9f,0xdd,0xbd,0x94}}; //MAC address 98:03:9b:32:7d:32 //b8:59:9f:dd:bd:94
+    struct rte_ether_addr dst_mac_addr = {{0x98,0x03,0x9b,0x32,0x7d,0x32}}; //MAC address 98:03:9b:32:7d:32 //b8:59:9f:dd:bd:94
     struct my_message *my_pkt;
     
     uint16_t rand;
