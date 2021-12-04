@@ -23,10 +23,10 @@
 
 #define NUM_MBUFS ((64*1024)-1)
 #define MBUF_CACHE_SIZE 250
-#define BURST_SIZE 256
+#define BURST_SIZE 64
 #define PTP_PROTOCOL 0x88F7
 #define HASH_ENTRIES 1024
-#define CONTROL_BURST_SIZE 256
+#define CONTROL_BURST_SIZE 64
 uint64_t rx_count; // global variable to keep track of the number of received packets (to be displayed every second)
 uint64_t tx_count;
 uint64_t rx_count_control;
@@ -140,7 +140,7 @@ create_hash_table(uint16_t num_entries)
 }
 
 static void
-populate_hash_table(const struct rte_hash *h, uint16_t num_entries, struct mempool *value_pool)
+populate_hash_table(const struct rte_hash *h, uint16_t num_entries, struct rte_mempool *value_pool)
 {
     int ret;
     uint16_t i;
@@ -308,7 +308,6 @@ void my_receive(struct receive_params *p)
     uint16_t key;
     struct value *lkp_val;
     
-    
     //printf("Measured frequency of counter is %"PRIu64"\n", rte_get_tsc_hz());
     
     printf("\nCore %u receiving data packets. [Ctrl+C to quit]\n", rte_lcore_id());
@@ -336,21 +335,9 @@ void my_receive(struct receive_params *p)
             if(unlikely(eth_type != PTP_PROTOCOL))
                 continue;
 
-                //printf("Packet length %"PRIu32"\n",rte_pktmbuf_pkt_len(bufs[i]));
             rx_count = rx_count + 1;
             rte_ether_addr_copy(&src_mac_addr, &my_pkt->eth_hdr.s_addr);
-            //rte_ether_addr_copy(&dst_mac_addr[position], &my_pkt->eth_hdr.d_addr);
             rte_ether_addr_copy(&dst_mac_addr[0], &my_pkt->eth_hdr.d_addr);
-            
-//            key = my_pkt->dst_addr;
-//            retval = rte_hash_lookup_data(handle, (void*)&key, (void **)&lkp_val);
-//            if(unlikely(retval < 0)){
-//                printf("Error looking up for key %"PRIu16"\n", key);
-//                continue;
-//            }
-//            memcpy(&my_pkt->t, &lkp_val->t, sizeof(uint64_t));
-//            rte_ether_addr_copy(&src_mac_addr, &my_pkt->eth_hdr.s_addr);
-//            rte_ether_addr_copy(&lkp_val->dest_mac_addr, &my_pkt->eth_hdr.d_addr);
         }
         
         
