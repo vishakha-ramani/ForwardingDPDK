@@ -18,11 +18,11 @@
 #include <getopt.h>
 
 #define RX_RING_SIZE 1024
-#define TX_RING_SIZE 256
+#define TX_RING_SIZE 128
 
 #define NUM_MBUFS ((64*1024)-1)
 #define MBUF_CACHE_SIZE 250
-#define BURST_SIZE 4
+#define BURST_SIZE 256
 #define CONTROL_BURST_SIZE 64
 #define PTP_PROTOCOL 0x88F7
 #define HASH_ENTRIES 1024
@@ -51,6 +51,23 @@ struct send_params{
     uint64_t max_packets;
 };
 
+struct my_message{
+    struct rte_ether_hdr eth_hdr;
+    uint16_t type;
+    uint16_t dst_addr;
+    uint32_t seqNo;
+    uint64_t T; // timestamp for data update
+    uint64_t t; // timestamp for control packet
+    char payload[10];
+    uint64_t clbk_ts;
+};
+
+struct control_message{
+    struct rte_ether_hdr eth_hdr;
+    uint16_t type;
+    uint16_t dst_addr;
+    uint64_t t; // timestamp for control packet
+};
 
 /* Rx/Tx callbacks variables - HW timestamping is not included since 
  * rte_mbuf_timestamp_t was not recognized. */
@@ -72,7 +89,57 @@ static struct {
 #define TICKS_PER_CYCLE_SHIFT 16
 static uint64_t ticks_per_cycle_mult;
 
+///* Callback added to the RX port and applied to packets. 8< */
+//static uint16_t
+//calc_latency(uint16_t port __rte_unused, uint16_t qidx __rte_unused,
+//        struct rte_mbuf **pkts, uint16_t nb_pkts,
+//        uint16_t max_pkts __rte_unused, void *_ __rte_unused)
+//{
+//    static uint64_t totalbatches = 0;
+//    uint64_t cycles = 0;
+//    uint64_t queue_ticks = 0;
+//    uint64_t now = rte_rdtsc();
+//    uint64_t ticks;
+//    unsigned i;
+//    for (i = 0; i < nb_pkts; i++) {
+//        cycles += now - *tsc_field(pkts[i]);
+//    }
+//    latency_numbers.total_cycles += cycles;
+//    latency_numbers.total_pkts += nb_pkts;
+//    totalbatches += 1;
+//    if (latency_numbers.total_pkts > (100 * 1000)) {
+//        printf("Latency = %"PRIu64" cycles/pkt %" PRIu64 " pkts/batch\n",
+//        latency_numbers.total_cycles / latency_numbers.total_pkts, latency_numbers.total_pkts /totalbatches);
+//        latency_numbers.total_cycles = 0;
+//        latency_numbers.total_queue_cycles = 0;
+//        latency_numbers.total_pkts = 0;
+//        totalbatches = 0;
+//    }
+//    return nb_pkts; 
+//}
+///* >8 End of callback addition and application. */
+//
+///* Callback is added to the TX port. 8< */
+//static uint16_t
+//add_timestamps(uint16_t port, uint16_t qidx __rte_unused,
+//        struct rte_mbuf **pkts, uint16_t nb_pkts, void *_ __rte_unused)
+//{   
+//    unsigned i;
+//    uint64_t now = rte_rdtsc();
+//    
+//    for (i = 0; i < nb_pkts; i++)
+//        *tsc_field(pkts[i]) = now;
+//    return nb_pkts;
+//}
+///* >8 End of callback addition. */
+
+
+
+
+
 /* Callback added to the RX port and applied to packets. 8< */
+
+
 static uint16_t
 calc_latency(uint16_t port __rte_unused, uint16_t qidx __rte_unused,
         struct rte_mbuf **pkts, uint16_t nb_pkts,
@@ -84,14 +151,18 @@ calc_latency(uint16_t port __rte_unused, uint16_t qidx __rte_unused,
     uint64_t now = rte_rdtsc();
     uint64_t ticks;
     unsigned i;
+    struct my_message *my_pkt;
+    
     for (i = 0; i < nb_pkts; i++) {
-        cycles += now - *tsc_field(pkts[i]);
+        //cycles += now - *tsc_field(pkts[i]);
+        my_pkt = rte_pktmbuf_mtod(pkts[i], struct my_message *);
+        cycles += now - my_pkt->clbk_ts;
     }
     latency_numbers.total_cycles += cycles;
     latency_numbers.total_pkts += nb_pkts;
     totalbatches += 1;
     if (latency_numbers.total_pkts > (100 * 1000)) {
-        printf("Latency = %"PRIu64" cycles/pkt %" PRIu64 " pkts/batch\n",
+        printf("Callbacks: Latency = %"PRIu64" cycles/pkt %" PRIu64 " pkts/batch\n",
         latency_numbers.total_cycles / latency_numbers.total_pkts, latency_numbers.total_pkts /totalbatches);
         latency_numbers.total_cycles = 0;
         latency_numbers.total_queue_cycles = 0;
@@ -109,15 +180,16 @@ add_timestamps(uint16_t port, uint16_t qidx __rte_unused,
 {   
     unsigned i;
     uint64_t now = rte_rdtsc();
+    struct my_message *my_pkt;
     
-    for (i = 0; i < nb_pkts; i++)
-        *tsc_field(pkts[i]) = now;
+    for (i = 0; i < nb_pkts; i++){
+        //*tsc_field(pkts[i]) = now;
+        my_pkt = rte_pktmbuf_mtod(pkts[i], struct my_message *);
+        my_pkt->clbk_ts = now;
+    }
     return nb_pkts;
 }
 /* >8 End of callback addition. */
-
-
-
 
 /*
  * Initializes a given port using global settings and with the RX buffers
@@ -218,22 +290,7 @@ lcore_stat(__rte_unused void *arg)
     }
 }
 
-struct my_message{
-    struct rte_ether_hdr eth_hdr;
-    uint16_t type;
-    uint16_t dst_addr;
-    uint32_t seqNo;
-    uint64_t T; // timestamp for data update
-    uint64_t t; // timestamp for control packet
-    char payload[10];
-};
 
-struct control_message{
-    struct rte_ether_hdr eth_hdr;
-    uint16_t type;
-    uint16_t dst_addr;
-    uint64_t t; // timestamp for control packet
-};
 
 void my_receive()
 {
@@ -323,7 +380,8 @@ my_send(struct send_params *p)
     uint16_t rand;
     data_sent=0;
     uint16_t sent_packets = BURST_SIZE;
-
+    
+    uint64_t start = rte_rdtsc_precise();
     
     //printf("Measured frequency of data packet sending machine is %"PRIu64"\n", rte_get_tsc_hz());
 
@@ -377,6 +435,12 @@ my_send(struct send_params *p)
         //printf("Sent data packets with destination address %"PRIu32"\n", rand);
     }
     while(data_sent < max_packets);
+    
+    uint64_t cycles_spent = rte_rdtsc_precise()-start;
+    printf("Cycles spent %"PRIu64"\n", cycles_spent);
+    float time_spent = cycles_spent % rte_get_timer_hz();
+    printf("Time spent %f \n", time_spent);
+    printf("Total Throughput is %f\n", globalSent/time_spent);
     
     printf("\nNumber of \033[;32mdata\033[0m packets transmitted by logical core %u is %"PRId64 "\n", rte_lcore_id(), data_sent);
     
@@ -550,7 +614,6 @@ main(int argc, char *argv[])
         rte_exit(EXIT_FAILURE, "Slave core id required!");
     }
     rte_eal_remote_launch((lcore_function_t *)my_send, &data2, lcore_id); //on lcore 4
-    
     
     lcore_id = rte_get_next_lcore(lcore_id, 1, 0);
     if(lcore_id == RTE_MAX_LCORE)
