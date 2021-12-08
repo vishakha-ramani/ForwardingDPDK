@@ -3,6 +3,8 @@
  */
 
 #include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h> 
 #include <inttypes.h>
 #include <rte_eal.h>
 #include <rte_ethdev.h>
@@ -17,23 +19,29 @@
 #include <rte_random.h>
 #include <getopt.h>
 
-#define RX_RING_SIZE 1024
-#define TX_RING_SIZE 128
+//#define RX_RING_SIZE 1024
+//#define TX_RING_SIZE 1024
+
+uint16_t RX_RING_SIZE;
+uint16_t TX_RING_SIZE;
 
 #define NUM_MBUFS ((64*1024)-1)
 #define MBUF_CACHE_SIZE 250
-#define BURST_SIZE 256
-#define CONTROL_BURST_SIZE 64
+//#define BURST_SIZE 32
+uint16_t BURST_SIZE;
+//#define CONTROL_BURST_SIZE 256
+uint16_t CONTROL_BURST_SIZE;
 #define PTP_PROTOCOL 0x88F7
 #define HASH_ENTRIES 1024
 uint64_t rx_count;
 uint64_t startTime;
-uint64_t cyclesSum;
 uint64_t ctrlnow[HASH_ENTRIES];
 uint64_t data_sent;
 uint64_t control_sent;
-uint64_t num_batches;
-uint64_t globalSent;
+uint64_t batches_sent;
+uint64_t totalcycles;
+
+FILE *fp;
 
 
 static struct rte_mempool *mbuf_pool;
@@ -51,16 +59,17 @@ struct send_params{
     uint64_t max_packets;
 };
 
-struct my_message{
-    struct rte_ether_hdr eth_hdr;
+typedef struct __attribute__((__packed__)){
     uint16_t type;
     uint16_t dst_addr;
     uint32_t seqNo;
     uint64_t T; // timestamp for data update
     uint64_t t; // timestamp for control packet
-    char payload[10];
     uint64_t clbk_ts;
-};
+    char payload[10];
+    struct rte_ether_hdr eth_hdr;
+    uint32_t padding;
+}my_message;
 
 struct control_message{
     struct rte_ether_hdr eth_hdr;
@@ -89,56 +98,6 @@ static struct {
 #define TICKS_PER_CYCLE_SHIFT 16
 static uint64_t ticks_per_cycle_mult;
 
-///* Callback added to the RX port and applied to packets. 8< */
-//static uint16_t
-//calc_latency(uint16_t port __rte_unused, uint16_t qidx __rte_unused,
-//        struct rte_mbuf **pkts, uint16_t nb_pkts,
-//        uint16_t max_pkts __rte_unused, void *_ __rte_unused)
-//{
-//    static uint64_t totalbatches = 0;
-//    uint64_t cycles = 0;
-//    uint64_t queue_ticks = 0;
-//    uint64_t now = rte_rdtsc();
-//    uint64_t ticks;
-//    unsigned i;
-//    for (i = 0; i < nb_pkts; i++) {
-//        cycles += now - *tsc_field(pkts[i]);
-//    }
-//    latency_numbers.total_cycles += cycles;
-//    latency_numbers.total_pkts += nb_pkts;
-//    totalbatches += 1;
-//    if (latency_numbers.total_pkts > (100 * 1000)) {
-//        printf("Latency = %"PRIu64" cycles/pkt %" PRIu64 " pkts/batch\n",
-//        latency_numbers.total_cycles / latency_numbers.total_pkts, latency_numbers.total_pkts /totalbatches);
-//        latency_numbers.total_cycles = 0;
-//        latency_numbers.total_queue_cycles = 0;
-//        latency_numbers.total_pkts = 0;
-//        totalbatches = 0;
-//    }
-//    return nb_pkts; 
-//}
-///* >8 End of callback addition and application. */
-//
-///* Callback is added to the TX port. 8< */
-//static uint16_t
-//add_timestamps(uint16_t port, uint16_t qidx __rte_unused,
-//        struct rte_mbuf **pkts, uint16_t nb_pkts, void *_ __rte_unused)
-//{   
-//    unsigned i;
-//    uint64_t now = rte_rdtsc();
-//    
-//    for (i = 0; i < nb_pkts; i++)
-//        *tsc_field(pkts[i]) = now;
-//    return nb_pkts;
-//}
-///* >8 End of callback addition. */
-
-
-
-
-
-/* Callback added to the RX port and applied to packets. 8< */
-
 
 static uint16_t
 calc_latency(uint16_t port __rte_unused, uint16_t qidx __rte_unused,
@@ -147,15 +106,12 @@ calc_latency(uint16_t port __rte_unused, uint16_t qidx __rte_unused,
 {
     static uint64_t totalbatches = 0;
     uint64_t cycles = 0;
-    uint64_t queue_ticks = 0;
     uint64_t now = rte_rdtsc();
-    uint64_t ticks;
     unsigned i;
-    struct my_message *my_pkt;
+    my_message *my_pkt;
     
     for (i = 0; i < nb_pkts; i++) {
-        //cycles += now - *tsc_field(pkts[i]);
-        my_pkt = rte_pktmbuf_mtod(pkts[i], struct my_message *);
+        my_pkt = rte_pktmbuf_mtod(pkts[i], my_message *);
         cycles += now - my_pkt->clbk_ts;
     }
     latency_numbers.total_cycles += cycles;
@@ -180,21 +136,17 @@ add_timestamps(uint16_t port, uint16_t qidx __rte_unused,
 {   
     unsigned i;
     uint64_t now = rte_rdtsc();
-    struct my_message *my_pkt;
+    my_message *my_pkt;
     
     for (i = 0; i < nb_pkts; i++){
         //*tsc_field(pkts[i]) = now;
-        my_pkt = rte_pktmbuf_mtod(pkts[i], struct my_message *);
+        my_pkt = rte_pktmbuf_mtod(pkts[i], my_message *);
         my_pkt->clbk_ts = now;
     }
     return nb_pkts;
 }
 /* >8 End of callback addition. */
 
-/*
- * Initializes a given port using global settings and with the RX buffers
- * coming from the mbuf_pool passed as a parameter.
- */
 static inline int
 port_init(uint16_t port, struct rte_mempool *mbuf_pool)
 {
@@ -259,12 +211,12 @@ port_init(uint16_t port, struct rte_mempool *mbuf_pool)
         if (retval != 0)
                 return retval;
 
-        printf("Sender is Port %u with MAC address: %02" PRIx8 " %02" PRIx8 " %02" PRIx8
-                           " %02" PRIx8 " %02" PRIx8 " %02" PRIx8 "\n",
-                        port,
-                        addr.addr_bytes[0], addr.addr_bytes[1],
-                        addr.addr_bytes[2], addr.addr_bytes[3],
-                        addr.addr_bytes[4], addr.addr_bytes[5]);
+//        printf("Sender is Port %u with MAC address: %02" PRIx8 " %02" PRIx8 " %02" PRIx8
+//                           " %02" PRIx8 " %02" PRIx8 " %02" PRIx8 "\n",
+//                        port,
+//                        addr.addr_bytes[0], addr.addr_bytes[1],
+//                        addr.addr_bytes[2], addr.addr_bytes[3],
+//                        addr.addr_bytes[4], addr.addr_bytes[5]);
 
         /* Enable RX in promiscuous mode for the Ethernet device. */
         retval = rte_eth_promiscuous_enable(port);
@@ -286,7 +238,7 @@ lcore_stat(__rte_unused void *arg)
     {
         sleep(1); // report stats every second
         printf("Number of \033[;32mdata\033[0m packets received %"PRIu64 "\n", rx_count);
-        printf("Sent packets %" PRIu64 " batches %" PRIu64 "\n", globalSent, num_batches);
+        printf("Sent packets %" PRIu64 " batches %" PRIu64 "\n", data_sent, batches_sent);
     }
 }
 
@@ -295,7 +247,7 @@ lcore_stat(__rte_unused void *arg)
 void my_receive()
 {
     int retval;
-    struct my_message *my_pkt;
+    my_message *my_pkt;
     uint16_t eth_type; 
     rx_count = 0; 
     uint64_t now;
@@ -327,7 +279,7 @@ void my_receive()
         
         for(int i = 0; i < nb_rx; i++)
         {
-            my_pkt = rte_pktmbuf_mtod(bufs[i], struct my_message *);
+            my_pkt = rte_pktmbuf_mtod(bufs[i], my_message *);
             eth_type = rte_be_to_cpu_16(my_pkt->eth_hdr.ether_type);
             
             /* Check for data packet of interest and ignore other broadcasts 
@@ -348,7 +300,7 @@ void my_receive()
         if(likely(checkPkt > 0))
             totalbatches += 1;
         
-        //printf("Total packets = %"PRIu64" Total batches = %"PRIu64"\n", totalpackets, totalbatches);
+//        //printf("Total packets = %"PRIu64" Total batches = %"PRIu64"\n", totalpackets, totalbatches);
         if (totalpackets > (100 *1000)) {
             printf("Latency = %"PRIu64" cycles %"PRIu64" pkts per batch\n",
             totalcycles / totalpackets, totalpackets/totalbatches);
@@ -375,7 +327,7 @@ my_send(struct send_params *p)
     struct rte_ether_addr src_mac_addr;
     retval = rte_eth_macaddr_get(port, &src_mac_addr); // get MAC address of Port 0 on node1-1
     struct rte_ether_addr dst_mac_addr = {{0x98,0x03,0x9b,0x32,0x7d,0x32}}; //MAC address 98:03:9b:32:7d:32 //b8:59:9f:dd:bd:94
-    struct my_message *my_pkt;
+    my_message *my_pkt;  
     
     uint16_t rand;
     data_sent=0;
@@ -402,7 +354,7 @@ my_send(struct send_params *p)
                     "allocate memory for mbuf.\n");
                 break;
             }
-            my_pkt = rte_pktmbuf_mtod(bufs[i], struct my_message*);
+            my_pkt = rte_pktmbuf_mtod(bufs[i], my_message*);
             memcpy(my_pkt->payload, "Hello2021", 10);
             my_pkt->payload[9] = 0; // ensure termination 
             
@@ -417,30 +369,28 @@ my_send(struct send_params *p)
             rte_ether_addr_copy(&src_mac_addr, &my_pkt->eth_hdr.s_addr);
             rte_ether_addr_copy(&dst_mac_addr, &my_pkt->eth_hdr.d_addr);
             my_pkt->eth_hdr.ether_type = htons(PTP_PROTOCOL);
-            int pkt_size = sizeof(struct my_message);
+            int pkt_size = sizeof(my_message)*2;
             bufs[i]->pkt_len = pkt_size;
             bufs[i]->data_len = pkt_size;
             //printf("Sent \033[;32mdata\033[0m packets with destination address %"PRIu32"\n", rand);
         }
         for(int i=sent_packets; i< BURST_SIZE; i++){
-            my_pkt = rte_pktmbuf_mtod(bufs[i], struct my_message*);
+            my_pkt = rte_pktmbuf_mtod(bufs[i], my_message*);
             my_pkt->T = now;
         }
         sent_packets = rte_eth_tx_burst(port, queue_id, bufs, BURST_SIZE);
+        
         data_sent = data_sent + sent_packets;
-        num_batches+=1;
-        globalSent += sent_packets;
+        batches_sent+=1;
+        fprintf(fp, "%"PRIu16 " \t %"PRIu64 "\n", sent_packets, batches_sent);
         
         //rte_delay_ms(100);
-        //printf("Sent data packets with destination address %"PRIu32"\n", rand);
     }
     while(data_sent < max_packets);
+    fclose(fp); //Don't forget to close the file when finished
     
     uint64_t cycles_spent = rte_rdtsc_precise()-start;
     printf("Cycles spent %"PRIu64"\n", cycles_spent);
-    float time_spent = cycles_spent % rte_get_timer_hz();
-    printf("Time spent %f \n", time_spent);
-    printf("Total Throughput is %f\n", globalSent/time_spent);
     
     printf("\nNumber of \033[;32mdata\033[0m packets transmitted by logical core %u is %"PRId64 "\n", rte_lcore_id(), data_sent);
     
@@ -481,7 +431,7 @@ send_control(struct send_params *p)
         //rand = 100 + rte_rand()%10;
         ctrlTS = rte_rdtsc();
         rand = 100 + rte_rand()%(HASH_ENTRIES-100+1);
-        while(num_batches%4)
+        while(batches_sent%4)
             rte_pause();
         
         for(int i = 0; i < sent_packets; i ++)
@@ -538,9 +488,7 @@ main(int argc, char *argv[])
     unsigned nb_ports;
     uint16_t portid;
     uint16_t port;
-//    uint64_t num_data = BURST_SIZE*4; 
-//    uint64_t num_control = CONTROL_BURST_SIZE*4;
-    uint64_t num_data = 1048576; //BURST_SIZE*4096; // = 1048576
+    uint64_t num_data = 10;//1048576; //BURST_SIZE*4096*256; // = 1048576 268435456;//
     uint64_t num_control = CONTROL_BURST_SIZE*100000; // number of control updates
     unsigned lcore_id;
     
@@ -555,10 +503,7 @@ main(int argc, char *argv[])
         .size = sizeof(tsc_t),
         .align = __alignof__(tsc_t),
     };
-
     
-    
-
     /* Initialize the Environment Abstraction Layer (EAL). */
     int ret = rte_eal_init(argc, argv);
     if (ret < 0)
@@ -566,7 +511,21 @@ main(int argc, char *argv[])
 
     argc -= ret;
     argv += ret;
-
+    
+    BURST_SIZE = atoi(argv[2]); 
+    printf("Sending BS %d\n", BURST_SIZE);
+    
+    CONTROL_BURST_SIZE = atoi(argv[4]);
+    printf("Receiving BS %d\n", CONTROL_BURST_SIZE);
+    
+    TX_RING_SIZE = atoi(argv[6]);
+    printf("Tx Ring %d\n", TX_RING_SIZE);
+    
+    RX_RING_SIZE = atoi(argv[8]);
+    printf("Rx ring %d\n", RX_RING_SIZE);
+    
+    fp = fopen(argv[10], "w");// "w" means that we are going to write on this file
+    
     optind = 1; /* reset getopt lib */
     
     nb_ports = rte_eth_dev_count_avail();
