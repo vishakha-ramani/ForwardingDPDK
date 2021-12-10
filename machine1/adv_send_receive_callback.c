@@ -332,6 +332,8 @@ my_send(struct send_params *p)
     uint16_t rand;
     data_sent=0;
     uint16_t sent_packets = BURST_SIZE;
+    int sent_arr[max_packets];
+    int j = 0;
     
     uint64_t start = rte_rdtsc_precise();
     
@@ -369,7 +371,7 @@ my_send(struct send_params *p)
             rte_ether_addr_copy(&src_mac_addr, &my_pkt->eth_hdr.s_addr);
             rte_ether_addr_copy(&dst_mac_addr, &my_pkt->eth_hdr.d_addr);
             my_pkt->eth_hdr.ether_type = htons(PTP_PROTOCOL);
-            int pkt_size = sizeof(my_message)*2;
+            int pkt_size = sizeof(my_message);
             bufs[i]->pkt_len = pkt_size;
             bufs[i]->data_len = pkt_size;
             //printf("Sent \033[;32mdata\033[0m packets with destination address %"PRIu32"\n", rand);
@@ -379,14 +381,18 @@ my_send(struct send_params *p)
             my_pkt->T = now;
         }
         sent_packets = rte_eth_tx_burst(port, queue_id, bufs, BURST_SIZE);
-        
+        sent_arr[j] = sent_packets;
+        j += 1;
         data_sent = data_sent + sent_packets;
         batches_sent+=1;
-        fprintf(fp, "%"PRIu16 " \t %"PRIu64 "\n", sent_packets, batches_sent);
-        
         //rte_delay_ms(100);
     }
     while(data_sent < max_packets);
+    
+    for(j = 1; j <= batches_sent; j++){
+        fprintf(fp, "%d \t %d\n", sent_arr[j-1], j); 
+    }
+    
     fclose(fp); //Don't forget to close the file when finished
     
     uint64_t cycles_spent = rte_rdtsc_precise()-start;
@@ -488,7 +494,7 @@ main(int argc, char *argv[])
     unsigned nb_ports;
     uint16_t portid;
     uint16_t port;
-    uint64_t num_data = 10;//1048576; //BURST_SIZE*4096*256; // = 1048576 268435456;//
+    uint64_t num_data = 1048576; //BURST_SIZE*4096*256; // = 1048576 268435456;//
     uint64_t num_control = CONTROL_BURST_SIZE*100000; // number of control updates
     unsigned lcore_id;
     
