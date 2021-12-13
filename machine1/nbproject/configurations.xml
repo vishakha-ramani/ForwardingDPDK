@@ -6,6 +6,7 @@
       <in>adv_send_receive_callback.c</in>
       <in>adv_send_receive_randaddr.c</in>
       <in>basic_send_receive.c</in>
+      <in>fast_send_receive.c</in>
     </df>
     <logicalFolder name="ExternalFiles"
                    displayName="Important Files"
@@ -69,6 +70,10 @@
         </cTool>
       </item>
       <item path="basic_send_receive.c" ex="false" tool="0" flavor2="0">
+        <cTool flags="0">
+        </cTool>
+      </item>
+      <item path="fast_send_receive.c" ex="false" tool="0" flavor2="0">
         <cTool flags="0">
         </cTool>
       </item>

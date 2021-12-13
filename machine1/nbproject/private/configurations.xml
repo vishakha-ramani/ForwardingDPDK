@@ -8,6 +8,7 @@
       <in>adv_send_receive_callback.c</in>
       <in>adv_send_receive_randaddr.c</in>
       <in>basic_send_receive.c</in>
+      <in>fast_send_receive.c</in>
     </df>
   </logicalFolder>
   <projectmakefile>Makefile</projectmakefile>

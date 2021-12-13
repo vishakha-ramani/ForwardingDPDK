@@ -20,16 +20,16 @@
 #include <getopt.h>
 
 //#define RX_RING_SIZE 1024
-//#define TX_RING_SIZE 1024
+//#define TX_RING_SIZE 128
 
-uint16_t RX_RING_SIZE;
 uint16_t TX_RING_SIZE;
+uint16_t RX_RING_SIZE;
 
-#define NUM_MBUFS ((64*1024)-1)
+#define NUM_MBUFS ((64*4096)-1)//((64*1024)-1)
 #define MBUF_CACHE_SIZE 250
-//#define BURST_SIZE 32
+//#define BURST_SIZE 256
+//#define CONTROL_BURST_SIZE 64
 uint16_t BURST_SIZE;
-//#define CONTROL_BURST_SIZE 256
 uint16_t CONTROL_BURST_SIZE;
 #define PTP_PROTOCOL 0x88F7
 #define HASH_ENTRIES 1024
@@ -39,6 +39,7 @@ uint64_t ctrlnow[HASH_ENTRIES];
 uint64_t data_sent;
 uint64_t control_sent;
 uint64_t batches_sent;
+uint64_t batches_received;
 uint64_t totalcycles;
 
 FILE *fp;
@@ -59,17 +60,16 @@ struct send_params{
     uint64_t max_packets;
 };
 
-typedef struct __attribute__((__packed__)){
+struct my_message{
+    struct rte_ether_hdr eth_hdr;
     uint16_t type;
     uint16_t dst_addr;
     uint32_t seqNo;
     uint64_t T; // timestamp for data update
     uint64_t t; // timestamp for control packet
-    uint64_t clbk_ts;
     char payload[10];
-    struct rte_ether_hdr eth_hdr;
-    uint32_t padding;
-}my_message;
+    uint64_t clbk_ts;
+};
 
 struct control_message{
     struct rte_ether_hdr eth_hdr;
@@ -99,6 +99,7 @@ static struct {
 static uint64_t ticks_per_cycle_mult;
 
 
+/* Callback added to the RX port and applied to packets. 8< */
 static uint16_t
 calc_latency(uint16_t port __rte_unused, uint16_t qidx __rte_unused,
         struct rte_mbuf **pkts, uint16_t nb_pkts,
@@ -108,23 +109,23 @@ calc_latency(uint16_t port __rte_unused, uint16_t qidx __rte_unused,
     uint64_t cycles = 0;
     uint64_t now = rte_rdtsc();
     unsigned i;
-    my_message *my_pkt;
+    struct my_message *my_pkt;
     
     for (i = 0; i < nb_pkts; i++) {
-        my_pkt = rte_pktmbuf_mtod(pkts[i], my_message *);
+        my_pkt = rte_pktmbuf_mtod(pkts[i], struct my_message *);
         cycles += now - my_pkt->clbk_ts;
     }
     latency_numbers.total_cycles += cycles;
     latency_numbers.total_pkts += nb_pkts;
     totalbatches += 1;
-    if (latency_numbers.total_pkts > (100 * 1000)) {
-        printf("Callbacks: Latency = %"PRIu64" cycles/pkt %" PRIu64 " pkts/batch\n",
-        latency_numbers.total_cycles / latency_numbers.total_pkts, latency_numbers.total_pkts /totalbatches);
-        latency_numbers.total_cycles = 0;
-        latency_numbers.total_queue_cycles = 0;
-        latency_numbers.total_pkts = 0;
-        totalbatches = 0;
-    }
+//    if (latency_numbers.total_pkts > (100 * 1000)) {
+//        printf("Callbacks: Latency = %"PRIu64" cycles/pkt %" PRIu64 " pkts/batch\n",
+//        latency_numbers.total_cycles / latency_numbers.total_pkts, latency_numbers.total_pkts /totalbatches);
+//        latency_numbers.total_cycles = 0;
+//        latency_numbers.total_queue_cycles = 0;
+//        latency_numbers.total_pkts = 0;
+//        totalbatches = 0;
+//    }
     return nb_pkts; 
 }
 /* >8 End of callback addition and application. */
@@ -136,11 +137,10 @@ add_timestamps(uint16_t port, uint16_t qidx __rte_unused,
 {   
     unsigned i;
     uint64_t now = rte_rdtsc();
-    my_message *my_pkt;
+    struct my_message *my_pkt;
     
     for (i = 0; i < nb_pkts; i++){
-        //*tsc_field(pkts[i]) = now;
-        my_pkt = rte_pktmbuf_mtod(pkts[i], my_message *);
+        my_pkt = rte_pktmbuf_mtod(pkts[i], struct my_message *);
         my_pkt->clbk_ts = now;
     }
     return nb_pkts;
@@ -224,8 +224,8 @@ port_init(uint16_t port, struct rte_mempool *mbuf_pool)
                 return retval;
         
         /* RX and TX callbacks are added to the ports. 8< */
-	rte_eth_add_tx_callback(0, 0, add_timestamps, NULL);
-	rte_eth_add_rx_callback(0, 0, calc_latency, NULL);
+//	rte_eth_add_tx_callback(0, 0, add_timestamps, NULL);
+//	rte_eth_add_rx_callback(0, 0, calc_latency, NULL);
 	/* >8 End of RX and TX callbacks. */
 
         return 0;
@@ -239,6 +239,8 @@ lcore_stat(__rte_unused void *arg)
         sleep(1); // report stats every second
         printf("Number of \033[;32mdata\033[0m packets received %"PRIu64 "\n", rx_count);
         printf("Sent packets %" PRIu64 " batches %" PRIu64 "\n", data_sent, batches_sent);
+        printf("Latency = %"PRIu64" cycles per pkt %"PRIu64" pkts per batch\n",
+            totalcycles / rx_count, rx_count/batches_received);
     }
 }
 
@@ -247,14 +249,12 @@ lcore_stat(__rte_unused void *arg)
 void my_receive()
 {
     int retval;
-    my_message *my_pkt;
+    struct my_message *my_pkt;
     uint16_t eth_type; 
     rx_count = 0; 
     uint64_t now;
     uint64_t addrTime = 0;
-    uint64_t totalcycles = 0;
     uint64_t totalpackets = 0;
-    uint64_t totalbatches = 0;
     uint16_t destAddr;
     uint16_t checkPkt;
     
@@ -279,7 +279,7 @@ void my_receive()
         
         for(int i = 0; i < nb_rx; i++)
         {
-            my_pkt = rte_pktmbuf_mtod(bufs[i], my_message *);
+            my_pkt = rte_pktmbuf_mtod(bufs[i], struct my_message *);
             eth_type = rte_be_to_cpu_16(my_pkt->eth_hdr.ether_type);
             
             /* Check for data packet of interest and ignore other broadcasts 
@@ -298,16 +298,7 @@ void my_receive()
         }
         
         if(likely(checkPkt > 0))
-            totalbatches += 1;
-        
-//        //printf("Total packets = %"PRIu64" Total batches = %"PRIu64"\n", totalpackets, totalbatches);
-        if (totalpackets > (100 *1000)) {
-            printf("Latency = %"PRIu64" cycles %"PRIu64" pkts per batch\n",
-            totalcycles / totalpackets, totalpackets/totalbatches);
-            totalcycles = 0;
-            totalpackets = 0;
-            totalbatches = 0;
-        }
+            batches_received += 1;
     }
 }
 
@@ -324,10 +315,11 @@ my_send(struct send_params *p)
 
     uint32_t seq_num = 0;
     struct rte_mbuf *bufs[BURST_SIZE];
+    printf("%p\n", bufs);
     struct rte_ether_addr src_mac_addr;
     retval = rte_eth_macaddr_get(port, &src_mac_addr); // get MAC address of Port 0 on node1-1
     struct rte_ether_addr dst_mac_addr = {{0x98,0x03,0x9b,0x32,0x7d,0x32}}; //MAC address 98:03:9b:32:7d:32 //b8:59:9f:dd:bd:94
-    my_message *my_pkt;  
+    struct my_message *my_pkt;
     
     uint16_t rand;
     data_sent=0;
@@ -352,11 +344,12 @@ my_send(struct send_params *p)
             //rand = 100 + rte_rand()%(HASH_ENTRIES-100+1);
             bufs[i] = rte_pktmbuf_alloc(mbuf_pool);
             if (unlikely(bufs[i] == NULL)) {
-                printf("Couldn't "
-                    "allocate memory for mbuf.\n");
-                break;
+//                printf("Couldn't "
+//                    "allocate memory for mbuf.\n");
+//                break;
+                rte_exit(EXIT_FAILURE, "Couldn't allocate memory for mbuf.\n");
             }
-            my_pkt = rte_pktmbuf_mtod(bufs[i], my_message*);
+            my_pkt = rte_pktmbuf_mtod(bufs[i], struct my_message*);
             memcpy(my_pkt->payload, "Hello2021", 10);
             my_pkt->payload[9] = 0; // ensure termination 
             
@@ -371,13 +364,13 @@ my_send(struct send_params *p)
             rte_ether_addr_copy(&src_mac_addr, &my_pkt->eth_hdr.s_addr);
             rte_ether_addr_copy(&dst_mac_addr, &my_pkt->eth_hdr.d_addr);
             my_pkt->eth_hdr.ether_type = htons(PTP_PROTOCOL);
-            int pkt_size = sizeof(my_message);
+            int pkt_size = sizeof(struct my_message);
             bufs[i]->pkt_len = pkt_size;
             bufs[i]->data_len = pkt_size;
             //printf("Sent \033[;32mdata\033[0m packets with destination address %"PRIu32"\n", rand);
         }
         for(int i=sent_packets; i< BURST_SIZE; i++){
-            my_pkt = rte_pktmbuf_mtod(bufs[i], my_message*);
+            my_pkt = rte_pktmbuf_mtod(bufs[i], struct my_message*);
             my_pkt->T = now;
         }
         sent_packets = rte_eth_tx_burst(port, queue_id, bufs, BURST_SIZE);
@@ -389,16 +382,16 @@ my_send(struct send_params *p)
     }
     while(data_sent < max_packets);
     
-    for(j = 1; j <= batches_sent; j++){
-        fprintf(fp, "%d \t %d\n", sent_arr[j-1], j); 
-    }
-    
-    fclose(fp); //Don't forget to close the file when finished
-    
     uint64_t cycles_spent = rte_rdtsc_precise()-start;
     printf("Cycles spent %"PRIu64"\n", cycles_spent);
     
     printf("\nNumber of \033[;32mdata\033[0m packets transmitted by logical core %u is %"PRId64 "\n", rte_lcore_id(), data_sent);
+    
+    for(j = 1; j <= batches_sent; j++){
+        fprintf(fp, "%d \t %d\n", sent_arr[j-1], j); 
+    }
+
+    fclose(fp);
     
         /* Free any unsent packets. */
     if (unlikely(sent_packets < BURST_SIZE)) {
@@ -494,7 +487,7 @@ main(int argc, char *argv[])
     unsigned nb_ports;
     uint16_t portid;
     uint16_t port;
-    uint64_t num_data = 1048576; //BURST_SIZE*4096*256; // = 1048576 268435456;//
+    uint64_t num_data = 1048576; //BURST_SIZE*4096; // = 1048576
     uint64_t num_control = CONTROL_BURST_SIZE*100000; // number of control updates
     unsigned lcore_id;
     
@@ -509,7 +502,7 @@ main(int argc, char *argv[])
         .size = sizeof(tsc_t),
         .align = __alignof__(tsc_t),
     };
-    
+
     /* Initialize the Environment Abstraction Layer (EAL). */
     int ret = rte_eal_init(argc, argv);
     if (ret < 0)
@@ -520,13 +513,13 @@ main(int argc, char *argv[])
     
     BURST_SIZE = atoi(argv[2]); 
     printf("Sending BS %d\n", BURST_SIZE);
-    
+
     CONTROL_BURST_SIZE = atoi(argv[4]);
     printf("Receiving BS %d\n", CONTROL_BURST_SIZE);
-    
+
     TX_RING_SIZE = atoi(argv[6]);
-    printf("Tx Ring %d\n", TX_RING_SIZE);
-    
+    printf("Tx ring %d\n", TX_RING_SIZE);
+
     RX_RING_SIZE = atoi(argv[8]);
     printf("Rx ring %d\n", RX_RING_SIZE);
     
@@ -568,6 +561,8 @@ main(int argc, char *argv[])
                                     "polling thread.\n\tPerformance will "
                                     "not be optimal.\n", port);
     
+    
+    printf("Size of packet %zd\n", sizeof(struct my_message));
 
     struct send_params data2 = {mbuf_pool, 0, 0, num_data};
     struct send_params control = {mbuf_pool, 1, 0, num_control};
@@ -596,5 +591,8 @@ main(int argc, char *argv[])
     rte_eal_remote_launch(lcore_stat, NULL, lcore_id); //on lcore 8
    
     my_receive(); //on lcore2
+    
+    rte_eal_mp_wait_lcore();
+
     return 0;
 }
