@@ -3,7 +3,6 @@
  */
 
 #include <stdint.h>
-#include <stdlib.h> 
 #include <inttypes.h>
 #include <getopt.h>
 #include <rte_eal.h>
@@ -22,17 +21,18 @@
 //#define RX_RING_SIZE 1024
 //#define TX_RING_SIZE 1024
 
-uint16_t RX_RING_SIZE;
 uint16_t TX_RING_SIZE;
+uint16_t RX_RING_SIZE;
 
 #define NUM_MBUFS ((64*1024)-1)
 #define MBUF_CACHE_SIZE 250
-//#define BURST_SIZE 256
+//#define BURST_SIZE 64
+//#define CONTROL_BURST_SIZE 64
 uint16_t BURST_SIZE;
+uint16_t CONTROL_BURST_SIZE;
 #define PTP_PROTOCOL 0x88F7
 #define HASH_ENTRIES 1024
-//#define CONTROL_BURST_SIZE 64
-uint16_t CONTROL_BURST_SIZE;
+
 uint64_t rx_count; // global variable to keep track of the number of received packets (to be displayed every second)
 uint64_t tx_count;
 uint64_t rx_count_control;
@@ -95,7 +95,7 @@ calc_latency(uint16_t port, uint16_t qidx __rte_unused,
     latency_numbers.total_cycles += cycles;
     latency_numbers.total_pkts += nb_pkts;
     totalbatches += 1;
-    if (latency_numbers.total_pkts > (100 * 1000*100)) {
+    if (latency_numbers.total_pkts > (100 * 1000)) {
         printf("func - Latency = %"PRIu64" cycles %" PRIu64 " number\n",
         latency_numbers.total_cycles / latency_numbers.total_pkts, latency_numbers.total_pkts /totalbatches);
         latency_numbers.total_cycles = 0;
@@ -340,7 +340,8 @@ void my_receive(struct receive_params *p)
             
             if(unlikely(eth_type != PTP_PROTOCOL))
                 continue;
-
+            
+            //printf("Packet length %"PRIu32"\n",rte_pktmbuf_pkt_len(bufs[i]));
             rx_count = rx_count + 1;
             rte_ether_addr_copy(&src_mac_addr, &my_pkt->eth_hdr.s_addr);
             rte_ether_addr_copy(&dst_mac_addr[0], &my_pkt->eth_hdr.d_addr);
@@ -352,7 +353,7 @@ void my_receive(struct receive_params *p)
         totalpackets += nb_rx;
         totalbatches += 1;
         
-        if (totalpackets > (100 * 1000*100)) {
+        if (totalpackets > (100 * 1000)) {
         printf("Latency = %"PRIu64" cycles %"PRIu64" number\n",
         totalcycles / totalpackets, totalpackets/totalbatches);
         totalcycles = 0;
@@ -466,15 +467,16 @@ main(int argc, char *argv[])
     
     BURST_SIZE = atoi(argv[2]); 
     printf("Sending BS %d\n", BURST_SIZE);
-    
+
     CONTROL_BURST_SIZE = atoi(argv[4]);
     printf("Receiving BS %d\n", CONTROL_BURST_SIZE);
-    
+
     TX_RING_SIZE = atoi(argv[6]);
-    printf("Tx Ring %d\n", TX_RING_SIZE);
-    
+    printf("Tx ring %d\n", TX_RING_SIZE);
+
     RX_RING_SIZE = atoi(argv[8]);
     printf("Rx ring %d\n", RX_RING_SIZE);
+    
 
     optind = 1; /* reset getopt lib */
     
