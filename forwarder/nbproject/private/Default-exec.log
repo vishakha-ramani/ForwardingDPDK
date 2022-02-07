@@ -1,5 +1,5 @@
 called: cc
-	/root/forwarder
+	/root/dpdk-21.08/examples/mytest/forwarder
 	cc
 	-O3
 	-include
@@ -8,9 +8,13 @@ called: cc
 	-I/usr/local/include
 	-I/usr/include/libnl3
 	-DALLOW_EXPERIMENTAL_API
-	basicfwd.c
+	main.c
+	parse_args.c
+	parse_fib.c
+	common.h
+	../common.h
 	-o
-	build/basicfwd-shared
+	build/main-shared
 	-L/usr/local/lib/x86_64-linux-gnu
 	-Wl,--as-needed
 	-lrte_node
@@ -66,12 +70,12 @@ called: cc
 	-lrte_kvargs
 
 called: /usr/bin/ld
-	/root/forwarder
+	/root/dpdk-21.08/examples/mytest/forwarder
 	/usr/bin/ld
 	-plugin
 	/usr/lib/gcc/x86_64-linux-gnu/7/liblto_plugin.so
 	-plugin-opt=/usr/lib/gcc/x86_64-linux-gnu/7/lto-wrapper
-	-plugin-opt=-fresolution=/tmp/ccOUxeZ4.res
+	-plugin-opt=-fresolution=/tmp/ccP6tIpc.res
 	-plugin-opt=-pass-through=-lgcc
 	-plugin-opt=-pass-through=-lgcc_s
 	-plugin-opt=-pass-through=-lc
@@ -91,7 +95,7 @@ called: /usr/bin/ld
 	-z
 	relro
 	-o
-	build/basicfwd-shared
+	build/main-shared
 	/usr/lib/gcc/x86_64-linux-gnu/7/../../../x86_64-linux-gnu/Scrt1.o
 	/usr/lib/gcc/x86_64-linux-gnu/7/../../../x86_64-linux-gnu/crti.o
 	/usr/lib/gcc/x86_64-linux-gnu/7/crtbeginS.o
@@ -104,7 +108,9 @@ called: /usr/bin/ld
 	-L/usr/lib/x86_64-linux-gnu
 	-L/usr/lib/../lib
 	-L/usr/lib/gcc/x86_64-linux-gnu/7/../../..
-	/tmp/ccFmnpE6.o
+	/tmp/cc2eWSMJ.o
+	/tmp/cc7s6AgS.o
+	/tmp/ccKIUFk1.o
 	--as-needed
 	-lrte_node
 	-lrte_graph

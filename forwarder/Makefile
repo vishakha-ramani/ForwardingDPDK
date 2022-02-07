@@ -2,10 +2,14 @@
 # Copyright(c) 2010-2014 Intel Corporation
 
 # binary name
-APP = basic_forwarder
+#APP = test_add_qsbr
+APP = main
+#APP = rcu_constrained
 
 # all source are stored in SRCS-y
-SRCS-y := basic_forwarder.c
+SRCS-y := main.c parse_args.c parse_fib.c common.h ../common.h
+#SRCS-y := test_add_qsbr.c
+#SRCS-y := rcu_constrained.c
 
 PKGCONF ?= pkg-config
 
@@ -23,18 +27,10 @@ static: build/$(APP)-static
 
 PC_FILE := $(shell $(PKGCONF) --path libdpdk 2>/dev/null)
 CFLAGS += -O3 $(shell $(PKGCONF) --cflags libdpdk)
+# Add flag to allow experimental API as l2fwd uses rte_ethdev_set_ptype API
+CFLAGS += -DALLOW_EXPERIMENTAL_API
 LDFLAGS_SHARED = $(shell $(PKGCONF) --libs libdpdk)
 LDFLAGS_STATIC = $(shell $(PKGCONF) --static --libs libdpdk)
-
-ifeq ($(MAKECMDGOALS),static)
-# check for broken pkg-config
-ifeq ($(shell echo $(LDFLAGS_STATIC) | grep 'whole-archive.*l:lib.*no-whole-archive'),)
-$(warning "pkg-config output list does not contain drivers between 'whole-archive'/'no-whole-archive' flags.")
-$(error "Cannot generate statically-linked binaries with this version of pkg-config")
-endif
-endif
-
-CFLAGS += -DALLOW_EXPERIMENTAL_API
 
 build/$(APP)-shared: $(SRCS-y) Makefile $(PC_FILE) | build
 	$(CC) $(CFLAGS) $(SRCS-y) -o $@ $(LDFLAGS) $(LDFLAGS_SHARED)
