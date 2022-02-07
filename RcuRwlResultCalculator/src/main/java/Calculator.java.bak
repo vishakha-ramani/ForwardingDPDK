@@ -1,0 +1,396 @@
+import java.io.*;
+import java.math.BigDecimal;
+import java.math.BigInteger;
+import java.math.RoundingMode;
+import java.util.*;
+
+
+public class Calculator {
+    private static final long MONITOR_NODE_ID = 0;
+    private static final int DEFAULT_ROUNDING_SCALE = 6;
+    private static final RoundingMode DEFAULT_ROUNDING_MODE = RoundingMode.HALF_EVEN;
+
+    private static class Times {
+        long senderStart, senderEnd;
+        long forwarderStart, forwarderEnd;
+    }
+
+    private static class NodeStat {
+        long firstT3, firstT8, lastT8;
+        long oldT3, expectedControl;
+        long correctReceived, dropped, misAddressed;
+        BigInteger totalAge = BigInteger.ZERO;
+        long firstT1, firstT8P, lastT8P; // T8P is the T8 without counting misaddressed ones, can be different from T8
+        long oldT1;
+        BigInteger totalCtrlAge = BigInteger.ZERO;
+    }
+
+    private static class ControlStat {
+        final long nodeId;
+        long allocateTime, freeTime;
+
+        ControlStat(long nodeId) {
+            this.nodeId = nodeId;
+        }
+    }
+
+    private static void parseSenderFile(String resultSenderFile, String outputFile,
+                                        HashMap<Long, NodeStat> nodes, HashMap<Long, ControlStat> controls,
+                                        Times times) {
+        try (BufferedReader reader = new BufferedReader(new FileReader(resultSenderFile));
+             PrintStream output = new PrintStream(outputFile)) {
+            times.senderStart = times.forwarderStart = Long.MAX_VALUE;
+            times.senderEnd = times.forwarderEnd = 0;
+
+            String line;
+            long lineCount = 0;
+            while ((line = reader.readLine()) != null) {
+                lineCount++;
+                String[] parts = line.split(" ");
+                if (parts.length < 3) {
+                    System.err.printf("%s:%d doesn't have at least 3 parts, skip!%n", resultSenderFile, lineCount);
+                    continue;
+                }
+                long nodeId = Long.parseLong(parts[1]);
+                long sendTime = Long.parseLong(parts[2]);
+                NodeStat node = nodes.compute(nodeId, (k, v) -> v == null ? new NodeStat() : v);
+
+                times.senderStart = Math.min(sendTime, times.senderStart);
+                times.senderEnd = Math.max(sendTime, times.senderEnd);
+
+                switch (parts[0]) {
+                    case "1": {
+                        node.expectedControl = sendTime;
+                        if (MONITOR_NODE_ID != 0 && nodeId == MONITOR_NODE_ID)
+                            System.out.printf("%d: C %d%n", lineCount, sendTime);
+                        controls.put(lineCount - 1, new ControlStat(nodeId));
+                        break;
+                    }
+                    case "0": {
+                        if (parts.length < 9) {
+                            System.err.printf("%s:%d [data] doesn't have 9 parts [0] [node_id] [t3] [t8] [t1] [t2] [t4] [t5] [t7], skip!%n", resultSenderFile, lineCount);
+                            continue;
+                        }
+                        long t8 = Long.parseLong(parts[3]);
+
+                        if (t8 == 0) { // dropped
+                            node.dropped++;
+                            if (MONITOR_NODE_ID != 0 && nodeId == MONITOR_NODE_ID)
+                                System.out.printf("%d: D dropped", lineCount);
+                        } else {
+                            times.senderEnd = Math.max(t8, times.senderEnd);
+                            long t1 = Long.parseLong(parts[4]);
+                            long t2 = Long.parseLong(parts[5]);
+                            long t4 = Long.parseLong(parts[6]);
+                            long t7 = Long.parseLong(parts[8]);
+
+                            if (t2 != 0) times.forwarderStart = Math.min(t2, times.forwarderStart);
+                            times.forwarderStart = Math.min(t4, times.forwarderStart);
+                            times.forwarderStart = Math.min(t7, times.forwarderStart);
+
+                            times.forwarderEnd = Math.max(t2, times.forwarderEnd);
+                            times.forwarderEnd = Math.max(t4, times.forwarderEnd);
+                            times.forwarderEnd = Math.max(t7, times.forwarderEnd);
+
+                            // calculate control age, we do not consider mis-addressed ones when counting control age
+                            if (t1 != 0) { // do not consider t1 = 0 situation (first triangle, add it at the end)
+                                if (node.firstT1 == 0) { // first packet
+                                    node.firstT1 = node.oldT1 = t1;
+                                    node.firstT8P = node.lastT8P = t8;
+                                } else if (t1 != node.oldT1) { // only consider when t1 != oldT1, since when t1 == oldT1, v1 == v2, result == 0
+                                    // v1 = t8 - oldT1
+                                    BigInteger v1 = BigInteger.valueOf(Math.subtractExact(t8, node.oldT1));
+                                    // v2 = t8 - t1
+                                    BigInteger v2 = BigInteger.valueOf(Math.subtractExact(t8, t1));
+                                    // totalCtrlAge = v1^2 - v2^2
+                                    // didn't do "/ 2" here, did it at the end
+                                    node.totalCtrlAge = node.totalCtrlAge.add(v1.multiply(v1).subtract(v2.multiply(v2)));
+                                    node.oldT1 = t1;
+                                    node.lastT8P = Math.max(node.lastT8P, t8);
+                                }
+                            }
+                            // end calculate control age
+                            // calculate data age
+                            if (t1 < node.expectedControl) { // mis-addressed
+                                if (MONITOR_NODE_ID != 0 && nodeId == MONITOR_NODE_ID)
+                                    System.out.printf("%d: D expect %d now %d%n", lineCount, node.expectedControl, t1);
+                                node.misAddressed++;
+                            } else {
+                                node.correctReceived++;
+                                node.lastT8 = Math.max(t8, node.lastT8);
+                                if (node.firstT3 == 0) { // first packet
+                                    node.firstT3 = node.oldT3 = sendTime;
+                                    node.firstT8 = t8;
+                                } else {
+                                    // v1 = t8 - oldT3
+                                    BigInteger v1 = BigInteger.valueOf(Math.subtractExact(t8, node.oldT3));
+                                    // v2 = t8 - t3
+                                    BigInteger v2 = BigInteger.valueOf(Math.subtractExact(t8, sendTime));
+                                    // totalAge += v1^2 - v2^2
+                                    // didn't do "/ 2" here, did it at the end
+                                    node.totalAge = node.totalAge.add(v1.multiply(v1).subtract(v2.multiply(v2)));
+                                    node.oldT3 = sendTime;
+                                }
+                            }
+                            // end calculate data age
+                        }
+                        break;
+                    }
+                    default: {
+                        System.err.printf("%s:%d doesn't start with 0 (data) or 1 (control), skip!%n", resultSenderFile, lineCount);
+                        break;
+                    }
+                }
+            }
+            System.out.printf("senderStartTime %d%nsenderEndTime %d%nsenderDuration %d%n" +
+                            "forwarderStartTime %d%nforwarderEndTime %d%nforwarderDuration %d%n",
+                    times.senderStart, times.senderEnd, Math.subtractExact(times.senderEnd, times.senderStart),
+                    times.forwarderStart, times.forwarderEnd, Math.subtractExact(times.forwarderEnd, times.forwarderStart));
+
+            output.printf("nodeId correctReceived dropped misAddressed " +
+                    "firstT3R firstT8R lastT3R lastT8R nodeDuration totalAge avgAge totalAgeNew avgAgeNew " +
+                    "firstT1R firstT8'R lastT1R lastT8'R nodeCtrlDuration totalCtrlAge avgCtrlAge totalCtrlAgeNew avgCtrlAgeNew%n");
+            final BigDecimal TWO = BigDecimal.valueOf(2);
+            final BigDecimal duration = BigDecimal.valueOf(Math.subtractExact(times.senderEnd, times.senderStart), 0);
+            nodes.entrySet().stream()
+                    .sorted(Comparator.comparingLong(Map.Entry::getKey))
+                    .forEach((e) -> {
+                        long id = e.getKey();
+                        NodeStat node = e.getValue();
+                        BigDecimal totalAge = new BigDecimal(node.totalAge).divide(TWO, 1, RoundingMode.UNNECESSARY);
+                        BigDecimal averageAge = node.firstT3 == 0
+                                ? null // if no packet is received
+                                : totalAge.divide(BigDecimal.valueOf(Math.subtractExact(node.lastT8, node.firstT3)), DEFAULT_ROUNDING_SCALE, DEFAULT_ROUNDING_MODE);
+
+                        BigDecimal totalCtrlAge = new BigDecimal(node.totalCtrlAge).divide(TWO, 1, RoundingMode.UNNECESSARY);
+                        BigDecimal averageCtrlAge = node.firstT1 == 0
+                                ? null // if no packet is forwarded
+                                : totalCtrlAge.divide(BigDecimal.valueOf(Math.subtractExact(node.lastT8P, node.firstT1)), DEFAULT_ROUNDING_SCALE, DEFAULT_ROUNDING_MODE);
+
+                        output.printf("%d %d %d %d %d %d %d %d %d %s %s ",
+                                id,
+                                node.correctReceived, node.dropped, node.misAddressed,
+                                node.firstT3 == 0 ? 0 : Math.subtractExact(node.firstT3, times.senderStart),
+                                node.firstT8 == 0 ? 0 : Math.subtractExact(node.firstT8, times.senderStart),
+                                node.oldT3 == 0 ? 0 : Math.subtractExact(node.oldT3, times.senderStart),
+                                node.lastT8 == 0 ? 0 : Math.subtractExact(node.lastT8, times.senderStart),
+                                Math.subtractExact(node.lastT8, node.firstT3),
+                                totalAge,
+                                averageAge);
+
+                        // add first and last "triangles" for data age
+                        if (node.firstT3 == 0) { // if no packet is received
+                            totalAge = duration.multiply(duration).divide(TWO, 1, RoundingMode.UNNECESSARY);
+                            System.out.printf("User %d didn't receive any correct packet, totalAge=%s%n", id, totalAge);
+                        } else {
+//                            if (id == 1100) {
+//                                System.out.printf("totalAge %s%n", totalAge);
+//                            }
+                            // v1 = node.firstT8 - senderStartTime
+                            BigDecimal firstTriangle = BigDecimal.valueOf(Math.subtractExact(node.firstT8, times.senderStart));
+                            // v2 = node.firstT8 - node.firstT3
+                            BigDecimal firstTriangleMinus = BigDecimal.valueOf(Math.subtractExact(node.firstT8, node.firstT3));
+                            // node.totalAge += (v1 * v1 - v2 * v2) / 2;
+                            totalAge = totalAge.add(
+                                    firstTriangle.multiply(firstTriangle).subtract(
+                                            firstTriangleMinus.multiply(firstTriangleMinus)
+                                    ).divide(TWO, 1, RoundingMode.UNNECESSARY)
+                            );
+
+                            // v3 = senderEndTime - node.oldT3;
+                            BigDecimal lastTriangle = BigDecimal.valueOf(Math.subtractExact(times.senderEnd, node.oldT3));
+                            // node.totalAge += v3 * v3 / 2;
+                            totalAge = totalAge.add(
+                                    lastTriangle.multiply(lastTriangle).divide(TWO, 1, RoundingMode.UNNECESSARY)
+                            );
+                        }
+                        averageAge = totalAge.divide(duration, DEFAULT_ROUNDING_SCALE, DEFAULT_ROUNDING_MODE);
+                        output.printf("%s %s ", totalAge, averageAge);
+
+                        output.printf("%d %d %d %d %d %s %s ",
+                                node.firstT1 == 0 ? 0 : Math.subtractExact(node.firstT1, times.senderStart),
+                                node.firstT8P == 0 ? 0 : Math.subtractExact(node.firstT8P, times.senderStart),
+                                node.oldT1 == 0 ? 0 : Math.subtractExact(node.oldT1, times.senderStart),
+                                node.lastT8P == 0 ? 0 : Math.subtractExact(node.lastT8P, times.senderStart),
+                                Math.subtractExact(node.lastT8P, node.firstT1),
+                                totalCtrlAge,
+                                averageCtrlAge);
+
+                        if (node.firstT1 == 0) { // if no packet is forwarded
+                            totalCtrlAge = duration.multiply(duration).divide(TWO, 1, RoundingMode.UNNECESSARY);
+                            System.out.printf("User %d didn't receive any packet, totalCtrlAge=%s%n", id, totalCtrlAge);
+                        } else { // triangles for ctrl age
+                            // v1 = node.firstT8P - senderStartTime
+                            BigDecimal firstTriangle = BigDecimal.valueOf(Math.subtractExact(node.firstT8P, times.senderStart));
+                            // v2 = node.firstT8P - node.firstT1
+                            BigDecimal firstTriangleMinus = BigDecimal.valueOf(Math.subtractExact(node.firstT8P, node.firstT1));
+
+                            // node.totalAge += (v1 * v1 - v2 * v2) / 2;
+                            totalCtrlAge = totalCtrlAge.add(
+                                    firstTriangle.multiply(firstTriangle).subtract(
+                                            firstTriangleMinus.multiply(firstTriangleMinus)
+                                    ).divide(TWO, 1, RoundingMode.UNNECESSARY)
+                            );
+
+                            // v3 = senderEndTime - node.oldT1;
+                            BigDecimal lastTriangle = BigDecimal.valueOf(Math.subtractExact(times.senderEnd, node.oldT1));
+                            // node.totalCtrlAge += v3 * v3 / 2;
+                            totalCtrlAge = totalCtrlAge.add(
+                                    lastTriangle.multiply(lastTriangle).divide(TWO, 1, RoundingMode.UNNECESSARY)
+                            );
+
+                        }
+                        averageCtrlAge = totalCtrlAge.divide(duration, DEFAULT_ROUNDING_SCALE, DEFAULT_ROUNDING_MODE);
+                        output.printf("%s %s%n", totalCtrlAge, averageCtrlAge);
+                    });
+            output.flush();
+        } catch (IOException e) {
+            System.err.printf("Failed to open file. Cause:%n");
+            e.printStackTrace(System.err);
+            System.exit(-1);
+        }
+    }
+
+    private static void parseMemFile(
+            String resultRcuUFile,
+            String memFile,
+            Times times,
+            HashMap<Long, NodeStat> nodes,
+            HashMap<Long, ControlStat> controls) {
+        System.out.printf("controlPackets %d%nnodes %d%n", controls.size(), nodes.size());
+
+        try (BufferedReader reader = new BufferedReader(new FileReader(resultRcuUFile));
+             PrintStream output = new PrintStream(memFile)) {
+            String line;
+            long lineCount = 0;
+            long pendingAdd = 0, entryCount = nodes.size(), maxEntryCount = entryCount, time = times.forwarderStart;
+            BigInteger totalCount = BigInteger.ZERO;
+            ArrayList<Long> pendingFrees = new ArrayList<>();
+
+            output.printf("timeR FIBEntries%n%d %d%n", 0, entryCount);
+            while ((line = reader.readLine()) != null) {
+                lineCount++;
+                String[] parts = line.split(" ");
+                if (parts.length < 2) {
+                    System.err.printf("%s:%d doesn't have at least 2 parts, skip!\n", resultRcuUFile, lineCount);
+                    continue;
+                }
+                switch (parts[0]) {
+                    case "A": { // allocate
+                        if (pendingAdd != 0) {
+                            System.err.printf("%s:%d multiple allocation for a control packet!%n", resultRcuUFile, lineCount);
+                            System.exit(-1);
+                        }
+                        pendingAdd = Long.parseLong(parts[1]);
+                        break;
+                    }
+                    case "F": { // free
+                        pendingFrees.add(Long.parseLong(parts[1]));
+                        break;
+                    }
+                    case "T": { // timestamp
+                        if (pendingAdd == 0) {
+                            System.err.printf("%s:%d no allocation for a control packet!%n", resultRcuUFile, lineCount);
+                            System.exit(-1);
+                        }
+                        long newTime = Long.parseLong(parts[1]);
+                        {
+                            ControlStat control = controls.get(pendingAdd);
+                            if (control == null) {
+                                System.err.printf("%s:%d cannot find control packet with sequence %d%n", resultRcuUFile, lineCount, pendingAdd);
+                                System.exit(-1);
+                            }
+                            if (control.allocateTime != 0) {
+                                System.err.printf("%s:%d duplicatie allocating control with sequence %d%n", resultRcuUFile, lineCount, pendingAdd);
+                                System.exit(-1);
+                            }
+                            control.allocateTime = newTime;
+                        }
+                        for (long pendingFree : pendingFrees) {
+                            if (pendingFree == 0)
+                                continue; // initial entries populated in the FIB before experiment starts
+                            ControlStat control = controls.get(pendingFree);
+                            if (control == null) {
+                                System.err.printf("%s:%d cannot find control packet with sequence %d%n", resultRcuUFile, lineCount, pendingFree);
+                                System.exit(-1);
+                            }
+                            if (control.allocateTime == 0) {
+                                System.err.printf("%s:%d freeing control packet before allocating with sequence %d%n", resultRcuUFile, lineCount, pendingFree);
+                                System.exit(-1);
+                            }
+                            control.freeTime = newTime;
+                        }
+                        // totalCount += entryCount * (newTime - time);
+                        totalCount = totalCount.add(BigInteger.valueOf(entryCount).multiply(BigInteger.valueOf(Math.subtractExact(newTime, time))));
+
+                        time = newTime;
+                        entryCount += 1 - pendingFrees.size(); // 1 allocate, n frees
+                        output.printf("%d %d%n", Math.subtractExact(time, times.forwarderStart), entryCount);
+                        maxEntryCount = Math.max(entryCount, maxEntryCount);
+
+                        pendingFrees.clear();
+                        pendingAdd = 0;
+                        break;
+                    }
+                    default: {
+                        System.err.printf("%s:%d error event type, skip!%n", resultRcuUFile, lineCount);
+                        break;
+                    }
+                }
+            }
+            output.printf("%d %d%n", times.forwarderEnd, entryCount);
+            output.flush();
+
+            // totalCount += entryCount * (forwarderEndTime - time);
+            totalCount = totalCount.add(
+                    BigInteger.valueOf(entryCount)
+                            .multiply(BigInteger.valueOf(Math.subtractExact(times.forwarderEnd, time)))
+            );
+            // averageCount = totalCount / (forwarderEndTime - forwarderStartTime)
+            BigDecimal averageCount = new BigDecimal(totalCount).divide(BigDecimal.valueOf(Math.subtractExact(times.forwarderEnd, times.forwarderStart)), DEFAULT_ROUNDING_SCALE, DEFAULT_ROUNDING_MODE);
+            System.out.printf("totalCount*time %s%navgFibSize %s%nmaxEntryCount %d%n",
+                    totalCount, averageCount, maxEntryCount);
+
+            long[] droppedControls = new long[1], handledControls = new long[1];
+            BigInteger[] totalControlDuration = new BigInteger[]{BigInteger.ZERO};
+
+            controls.forEach((seq, control) -> {
+                if (control.allocateTime == 0) {
+                    droppedControls[0]++;
+                } else {
+                    handledControls[0]++;
+                    long freeTime = control.freeTime;
+                    freeTime = freeTime == 0 ? times.forwarderEnd : freeTime;
+                    // totalControlDuration += freeTime - control.allocateTime
+                    totalControlDuration[0] = totalControlDuration[0].add(BigInteger.valueOf(Math.subtractExact(freeTime, control.allocateTime)));
+                }
+            });
+            // avgControlDuration = totalControlDuration / handledControls
+            BigDecimal avgControlDuration = new BigDecimal(totalControlDuration[0]).divide(new BigDecimal(handledControls[0]), DEFAULT_ROUNDING_SCALE, DEFAULT_ROUNDING_MODE);
+            System.out.printf("droppedControl %d%nhandledControl %d%ntotalFibEntryDuration %s%navgFibEntryDuration %s%n",
+                    droppedControls[0], handledControls[0], totalControlDuration[0], avgControlDuration);
+        } catch (IOException e) {
+            System.err.printf("Failed to open file. Cause:%n");
+            e.printStackTrace(System.err);
+            System.exit(-1);
+        }
+    }
+
+    public static void main(String[] args) {
+        if (args.length < 2 || args.length == 3) {
+            System.err.printf("Usage: %s %s %s [%s %s]%n", "java Calculator", "%result_sender_file%", "%output_file%", "%result_rcu_u_file%", "%output_mem_file%");
+            return;
+        }
+        // key: nodeId
+        HashMap<Long, NodeStat> nodes = new HashMap<>();
+        // key: control sequence number
+        HashMap<Long, ControlStat> controls = new HashMap<>();
+        Times times = new Times();
+
+        parseSenderFile(args[0], args[1], nodes, controls, times);
+        if (args.length > 3)
+            parseMemFile(args[2], args[3], times, nodes, controls);
+
+    }
+
+}
