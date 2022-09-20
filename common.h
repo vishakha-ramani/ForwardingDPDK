@@ -37,3 +37,24 @@ struct rte_rcu_qsbr *qs_variable;
 int control_receive_burst_size; //, control_tx_ring_size, control_rx_ring_size;
 char *forward_list_filename;
 // long long control_packet_count;
+
+
+typedef struct{
+  struct rte_ether_hdr ether;
+  uint32_t seq;
+  uint64_t time_send;
+} common_t;
+
+typedef struct{
+  common_t common_header;
+  uint64_t time_control;
+  uint64_t time_control_arrive_f;
+  uint64_t time_after_lookup_f;
+  uint64_t time_exit_f;
+} data_pkt_t;
+
+
+typedef struct{
+  common_t common_header;
+} control_pkt_t;
+#endif
