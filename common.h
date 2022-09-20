@@ -9,9 +9,23 @@ extern "C" {
 #include <getopt.h>
 #include <stddef.h>
 #include <rte_rwlock.h>
+#include <rte_ethdev.h>
+    
+#define DATA_PKT_SIZE 60
+#define CONTROL_PKT_SIZE 60
+#define MBUF_CACHE_SIZE 250
+#define MAX_LINE_WIDTH 250
 
-int data_send_burst_size, data_receive_burst_size, data_tx_ring_size, data_rx_ring_size;
-int control_tx_ring_size, control_rx_ring_size;
+#define ETHER_TYPE_CONTROL 0
+#define ETHER_TYPE_DATA 1
+#define ETHER_TYPE_WARMUP 2 
+
+int data_send_burst_size=32;
+int data_receive_burst_size=64;
+int data_tx_ring_size=64;
+int data_rx_ring_size=4096;
+int control_tx_ring_size=64;
+int control_rx_ring_size=64;
 struct rte_ether_addr forwarder_data_mac, forwarder_control_mac;
 char *trace_filename;
 int trace_repeat;
@@ -43,6 +57,7 @@ typedef struct{
   struct rte_ether_hdr ether;
   uint32_t seq;
   uint64_t time_send;
+  uint16_t dst_addr;
 } common_t;
 
 typedef struct{
