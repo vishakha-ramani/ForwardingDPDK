@@ -5,7 +5,10 @@
 extern "C" {
 #endif
 
+#include <stdint.h>
 #include <getopt.h>
+#include <stddef.h>
+#include <rte_rwlock.h>
 
 int data_send_burst_size, data_receive_burst_size, data_tx_ring_size, data_rx_ring_size;
 int control_tx_ring_size, control_rx_ring_size;
@@ -27,10 +30,10 @@ struct rte_ether_addr receiver_data_mac;
 struct rte_mempool *fib_entry_pool;
 struct rte_hash *fib;
 struct rte_rcu_qsbr *qs_variable;
-size_t mem_event_pos, mem_event_capacity;
-rte_rwlock_t rw_lock;
+// size_t mem_event_pos, mem_event_capacity;
+// rte_rwlock_t rw_lock;
 
 
 int control_receive_burst_size; //, control_tx_ring_size, control_rx_ring_size;
 char *forward_list_filename;
-long long control_packet_count;
+// long long control_packet_count;
