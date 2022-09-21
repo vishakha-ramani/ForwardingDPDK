@@ -13,9 +13,9 @@
 #define MBUF_CACHE_SIZE 250
 #define MAX_LINE_WIDTH 250
 
-#define ETHER_TYPE_CONTROL 0
-#define ETHER_TYPE_DATA 1
-#define ETHER_TYPE_WARMUP 2 
+#define ETHER_TYPE_CONTROL 0x0
+#define ETHER_TYPE_DATA 0x1
+#define ETHER_TYPE_WARMUP 0x2 
 #define MIN(v1, v2)	((v1) < (v2) ? (v1) : (v2))
 
 static const struct rte_eth_conf port_conf_default;

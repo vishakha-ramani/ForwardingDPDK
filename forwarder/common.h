@@ -2,8 +2,8 @@
 #define __FORWARDER_COMMON_H
 
 #define TEST_RCU
-#define TEST_RCU_CONSTRAINED
-#define TEST_RCU_PER_PACKET_QUIESCENT
+//#define TEST_RCU_CONSTRAINED
+//#define TEST_RCU_PER_PACKET_QUIESCENT
 //#define WRITE_TIME_AFTER_LOOKUP_F
 #define RESULT_PACKETS_FILENAME "result_forwarder_packets.txt" // comment if do not wish to write results
 
