@@ -14,7 +14,7 @@
 #define MAX_LINE_WIDTH 250
 
 #define ETHER_TYPE_DATA 0
-#define ETHER_TYPE_CONTROL 0
+#define ETHER_TYPE_CONTROL 1
 #define ETHER_TYPE_WARMUP 2 
 #define MIN(v1, v2)	((v1) < (v2) ? (v1) : (v2))
 
