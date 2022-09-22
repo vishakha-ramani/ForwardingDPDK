@@ -8,8 +8,8 @@
 #include <rte_rwlock.h>
 #include <rte_ethdev.h>
     
-#define DATA_PKT_SIZE 60
-#define CONTROL_PKT_SIZE 60
+#define DATA_PKT_SIZE 120
+#define CONTROL_PKT_SIZE 120
 #define MBUF_CACHE_SIZE 250
 #define MAX_LINE_WIDTH 250
 
@@ -31,14 +31,14 @@ static inline int
 port_init(uint16_t port, struct rte_mempool *mbuf_pool, int data_tx_ring_size, int data_rx_ring_size, struct rte_ether_addr* my_data_mac);
 
 
-typedef struct{
+typedef struct __attribute__((packed)){
   struct rte_ether_hdr ether;
   uint32_t seq;
   uint64_t time_send;
   uint16_t dst_addr;
 } common_t;
 
-typedef struct{
+typedef struct __attribute__((packed)){
   common_t common_header;
   uint64_t time_control;
   uint64_t time_control_arrive_f;
@@ -47,7 +47,7 @@ typedef struct{
 } data_pkt_t;
 
 
-typedef struct{
+typedef struct __attribute__((packed)){
   common_t common_header;
 } control_pkt_t;
 
