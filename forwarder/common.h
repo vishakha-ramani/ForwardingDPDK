@@ -2,15 +2,15 @@
 #define __FORWARDER_COMMON_H
 
 #define TEST_RCU
-//#define TEST_RCU_CONSTRAINED
-//#define TEST_RCU_PER_PACKET_QUIESCENT
+#define TEST_RCU_CONSTRAINED
+#define TEST_RCU_PER_PACKET_QUIESCENT
 //#define WRITE_TIME_AFTER_LOOKUP_F
 #define RESULT_PACKETS_FILENAME "result_forwarder_packets.txt" // comment if do not wish to write results
 
 #define RX_POOL_SIZE 16383
-#define DATA_RECEIVE_RING_SIZE ((data_receive_burst_size) * 4)
-#define CONTROL_RECEIVE_RING_SIZE ((data_receive_burst_size) * 4)
-#define DATA_SEND_RING_SIZE ((data_send_burst_size) * 16)
+#define DATA_RECEIVE_RING_SIZE ((data_receive_burst_size))
+#define CONTROL_RECEIVE_RING_SIZE ((data_receive_burst_size))
+#define DATA_SEND_RING_SIZE ((data_send_burst_size))
 #define REPORT_WAIT_MS 500
 #define TX_BURST_PERIOD_US 1
 

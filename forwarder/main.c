@@ -26,7 +26,7 @@ static struct rte_ether_addr my_data_mac; //, my_control_mac;
 static control_packet_stat_t *results;
 static volatile uint64_t received_control_count = 0, received_data_count = 0,
         rx_dropped_data_count = 0, tx_dropped_data_count = 0, tx_out_dropped_data_count = 0,
-        rx_dropped_control_count =0, other_packet_count = 0;
+        rx_dropped_control_count =0, other_packet_count = 0, my_tx_count = 0;
 static volatile bool running = true;
 
 int
@@ -98,13 +98,19 @@ static int receive_data_thread(void *param) {
     RTE_SET_USED(param);
 
     struct rte_mbuf *buf_rx[data_receive_burst_size];
-    struct rte_mbuf *to_data[data_receive_burst_size];
-    struct rte_mbuf *to_control[data_receive_burst_size];
-    struct rte_mbuf *to_free[data_receive_burst_size];
+    // struct rte_mbuf *to_data[data_receive_burst_size];
+    // struct rte_mbuf *to_control[data_receive_burst_size];
+   // struct rte_mbuf *to_free[data_receive_burst_size];
     uint16_t nb_rx, nb_to_data, nb_to_control, nb_free, i;
+    //-----//
+    uint16_t nb_tx, nb_data_rx;
+    //-------//
     uint16_t nb_control_sent, nb_data_sent, diff;
-    common_t *header;
+    data_pkt_t *header;
     uint16_t ether_type_control = ETHER_TYPE_CONTROL, ether_type_data = ETHER_TYPE_DATA;
+    struct rte_ether_addr src_mac_addr;
+    int retval = rte_eth_macaddr_get(0, &src_mac_addr);
+    struct rte_ether_addr dst_mac_addr;
 
     printf("\nCore %u receiving data packets.\n", rte_lcore_id());
 
@@ -113,29 +119,56 @@ static int receive_data_thread(void *param) {
         if (unlikely(!nb_rx)) continue;
         nb_to_data = nb_to_control = nb_free = 0;
         for (i = 0; i < nb_rx; i++) {
-            header = rte_pktmbuf_mtod(buf_rx[i], common_t * );
-            if (likely(header->ether.ether_type == ether_type_data))
-                to_data[nb_to_data++] = buf_rx[i];
-            else if (likely(header->ether.ether_type == ether_type_control))
-                to_control[nb_to_control++] = buf_rx[i];
+            //header = rte_pktmbuf_mtod(buf_rx[i], common_t * );
+            header = rte_pktmbuf_mtod(buf_rx[i], data_pkt_t * );
+            dst_mac_addr = header->common_header.ether.s_addr;
+            if (likely(header->common_header.ether.ether_type == ether_type_data)){
+                //to_data[nb_to_data++] = buf_rx[i];
+                //------//
+                rte_ether_addr_copy(&src_mac_addr, &header->common_header.ether.s_addr);
+                rte_ether_addr_copy(&dst_mac_addr, &header->common_header.ether.d_addr);
+                header->time_control = 0; //entry->control_time;
+                header->time_control_arrive_f = 0;//entry->control_arrive_time_f;
+                header->common_header.time_send = *rx_timestamp_field(buf_rx[i]); // reuse time_send for time_arrive_f
+#ifdef WRITE_TIME_AFTER_LOOKUP_F
+                header->time_after_lookup_f = rte_rdtsc_precise();
+#endif
+                received_data_count++;
+                nb_to_data++;
+              }
+//            else if (likely(header->common_header.ether.ether_type == ether_type_control)) {
+                //to_control[nb_to_control++] = buf_rx[i];
+                //------//
+//                rte_ether_addr_copy(&src_mac_addr, &header->common_header.ether.s_addr);
+//                rte_ether_addr_copy(&dst_mac_addr, &header->common_header.ether.d_addr);
+//                received_control_count++;
+//		nb_to_control++;
+//              }
             else {
-                to_free[nb_free++] = buf_rx[i];
+     //           to_free[nb_free++] = buf_rx[i];
                 other_packet_count++;
             }
         }
-        if (likely(nb_to_control)) {
-            nb_control_sent = rte_ring_enqueue_burst(control_receive_ring, (void **)to_control, nb_to_control, NULL);
-            diff = nb_to_control - nb_control_sent;
-            rx_dropped_control_count += diff;
-            if (unlikely(diff)) rte_pktmbuf_free_bulk(to_control + nb_control_sent, diff);
-        }
-        if (likely(nb_to_data)) {
-            nb_data_sent = rte_ring_enqueue_burst(data_receive_ring, (void **)to_data, nb_to_data, NULL);
-            diff = nb_to_data - nb_data_sent;
-            rx_dropped_data_count += diff;
-            if (unlikely(diff)) rte_pktmbuf_free_bulk(to_data + nb_data_sent, diff);
-        }
-        if (unlikely(nb_free)) rte_pktmbuf_free_bulk(to_free, nb_free);
+        // if (likely(nb_to_control)) {
+        //     nb_control_sent = rte_ring_enqueue_burst(control_receive_ring, (void **)to_control, nb_to_control, NULL);
+        //     diff = nb_to_control - nb_control_sent;
+        //     rx_dropped_control_count += diff;
+        //     if (unlikely(diff)) rte_pktmbuf_free_bulk(to_control + nb_control_sent, diff);
+        // }
+        // if (likely(nb_to_data)) {
+        //     nb_data_sent = rte_ring_enqueue_burst(data_receive_ring, (void **)to_data, nb_to_data, NULL);
+        //     diff = nb_to_data - nb_data_sent;
+        //     rx_dropped_data_count += diff;
+        //     if (unlikely(diff)) rte_pktmbuf_free_bulk(to_data + nb_data_sent, diff);
+        // }
+//        if (unlikely(nb_free)) rte_pktmbuf_free_bulk(to_free, nb_free);
+	//rte_delay_us_sleep(2);
+        nb_tx = rte_eth_tx_burst(port_id_data, 0, buf_rx, nb_to_control + nb_to_data);
+	my_tx_count = my_tx_count + nb_tx;
+        diff = (nb_to_control + nb_to_data)  - nb_tx;
+        tx_out_dropped_data_count += diff;
+	//printf("tx_out_dropped %zd \n", tx_out_dropped_data_count);
+        if (unlikely(diff)) rte_pktmbuf_free_bulk(buf_rx + nb_tx, diff);
     }
     printf("Core %u (data receiver) finished!\n", rte_lcore_id());
     return 0;
@@ -285,13 +318,13 @@ static inline void report_status() {
     uint64_t start_time_cycles = rte_rdtsc_precise();
     while(running) {
         uint64_t time_cycles = rte_rdtsc_precise();
-        printf("[%14"PRIu64"] rx_ctrl=%zd rx_data=%zd rx_data_drop=%zd rx_ctrl_drop=%zd sum=%zd tx_drop=%zd tx_drop2=%zd other_pkt=%zd\n",
+        printf("[%14"PRIu64"] rx_ctrl=%zd rx_data=%zd rx_data_drop=%zd rx_ctrl_drop=%zd sum=%zd tx_drop=%zd tx_drop2=%zd other_pkt=%zd, my_tx_count=%zd\n",
                 time_cycles - start_time_cycles,
                 received_control_count, received_data_count,
                 rx_dropped_data_count, rx_dropped_control_count,
                 received_control_count + received_data_count + rx_dropped_data_count + rx_dropped_control_count,
                 tx_dropped_data_count, tx_out_dropped_data_count,
-                other_packet_count);
+                other_packet_count, my_tx_count);
         rte_delay_ms(REPORT_WAIT_MS);
     }
     printf("Core %u (status reporter) finished!\n", rte_lcore_id());
@@ -454,25 +487,25 @@ main(int argc, char *argv[]) {
     send_lcore_id = rte_get_next_lcore(-1, 1, 0);
     if (unlikely(send_lcore_id == RTE_MAX_LCORE))
         rte_exit(EXIT_FAILURE, "Send core required!\n");
-    ret = rte_eal_remote_launch(send_data_thread, NULL, send_lcore_id);
-    if (unlikely(ret))
-        rte_exit(EXIT_FAILURE, "Failed to launch send_data_thread\n");
+    //ret = rte_eal_remote_launch(send_data_thread, NULL, send_lcore_id);
+    // if (unlikely(ret))
+    //     rte_exit(EXIT_FAILURE, "Failed to launch send_data_thread\n");
 
     // start data process lcore
     forward_lcore_id = rte_get_next_lcore(send_lcore_id, 1, 0);
     if (unlikely(forward_lcore_id == RTE_MAX_LCORE))
         rte_exit(EXIT_FAILURE, "Forward core required!\n");
-    ret = rte_eal_remote_launch(forward_data_thread, NULL, forward_lcore_id);
-    if (unlikely(ret))
-        rte_exit(EXIT_FAILURE, "Failed to launch forward_data_thread\n");
+    // ret = rte_eal_remote_launch(forward_data_thread, NULL, forward_lcore_id);
+    // if (unlikely(ret))
+    //     rte_exit(EXIT_FAILURE, "Failed to launch forward_data_thread\n");
 
     // start control process lcore
     control_lcore_id = rte_get_next_lcore(forward_lcore_id, 1, 0);
     if (unlikely(control_lcore_id == RTE_MAX_LCORE))
         rte_exit(EXIT_FAILURE, "Control core required!\n");
-    ret = rte_eal_remote_launch(control_thread, NULL, control_lcore_id);
-    if (unlikely(ret))
-        rte_exit(EXIT_FAILURE, "Failed to launch control_thread\n");
+    // ret = rte_eal_remote_launch(control_thread, NULL, control_lcore_id);
+    // if (unlikely(ret))
+    //     rte_exit(EXIT_FAILURE, "Failed to launch control_thread\n");
 
     // start data receive lcore
     receive_lcore_id = rte_get_next_lcore(control_lcore_id, 1, 0);
@@ -485,7 +518,7 @@ main(int argc, char *argv[]) {
     report_status();
     rte_eal_mp_wait_lcore();
     write_results();
-    
+
 #if defined(TEST_RCU) && !defined(TEST_RCU_PER_PACKET_QUIESCENT)
     printf("TEST_RCU_PER_BATCH_QUIESCENT\n");
 #endif
