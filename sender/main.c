@@ -26,7 +26,7 @@ static uint64_t start_time_cycles;
 static volatile bool sending = true;
 static volatile int final_wait = WAIT_AFTER_FINISH_MS;
 static volatile uint64_t sent_packets = 0, remaining_send = 0;
-static volatile uint64_t receive_error_type = 0, receive_error_seq = 0, receive_redundant = 0, receive_data = 0;
+static volatile uint64_t receive_error_type = 0, receive_error_seq = 0, receive_redundant = 0, receive_data = 0 ;
 static volatile uint64_t batches_at_tx_callback = 0;
 #ifdef RATE_CONTROL
 static volatile uint64_t time_last_sent = 0;
@@ -345,7 +345,7 @@ main(int argc, char *argv[]) {
         rte_exit(EXIT_FAILURE, "Cannot get data port\n");
     port_init(port_id_data, mbuf_pool_data_rx, data_tx_ring_size, data_rx_ring_size, &my_data_mac);
     rte_eth_add_tx_callback(port_id_data, 0, data_tx_callback, NULL);
-    rte_eth_add_rx_callback(port_id_data, 0, data_rx_callback, NULL);
+   // rte_eth_add_rx_callback(port_id_data, 0, data_rx_callback, NULL);
     printf("\n");
 
     rte_ether_addr_copy(&my_data_mac, &my_control_mac);
@@ -366,11 +366,11 @@ main(int argc, char *argv[]) {
         rte_exit(EXIT_FAILURE, "Send core required!\n");
     rte_eal_remote_launch(send_thread, NULL, send_lcore_id);
 
-    report_status();
+//report_status();
 
     rte_eal_mp_wait_lcore();
 
-    calculate_statistics();
+  //  calculate_statistics();
 
 
     return 0;

@@ -55,13 +55,13 @@ parse_trace(void) {
     if (unlikely(!mbuf_pool_data_tx))
         rte_exit(EXIT_FAILURE, "Failed in creating mbuf_pool_data_tx\n");
 
-    printf("creating mbuf_pool_control_tx\n");
+//    printf("creating mbuf_pool_control_tx\n");
     /* Initialize control packet pool for tx */
-    mbuf_pool_control_tx = rte_pktmbuf_pool_create("MBUF_POOL_CONTROL_TX", control_packet_count * trace_repeat,
-                                                   0, 0, RTE_PKTMBUF_HEADROOM + CONTROL_PKT_SIZE,
-                                                   rte_socket_id());
-    if (unlikely(!mbuf_pool_control_tx))
-        rte_exit(EXIT_FAILURE, "Failed in creating mbuf_pool_control_rx\n");
+//    mbuf_pool_control_tx = rte_pktmbuf_pool_create("MBUF_POOL_CONTROL_TX", control_packet_count * trace_repeat,
+  //                                                 0, 0, RTE_PKTMBUF_HEADROOM + CONTROL_PKT_SIZE,
+    //                                               rte_socket_id());
+//    if (unlikely(!mbuf_pool_control_tx))
+//        rte_exit(EXIT_FAILURE, "Failed in creating mbuf_pool_control_rx\n");
 
     printf("creating trace_packets\n");
     trace_packets = (struct rte_mbuf **) rte_malloc("DATA_TRACE", sizeof(void *) * (total_packet_count * trace_repeat + warmup_size),
@@ -136,7 +136,7 @@ parse_trace(void) {
     }
 
     rte_mempool_dump(stdout, mbuf_pool_data_tx);
-    rte_mempool_dump(stdout, mbuf_pool_control_tx);
+//    rte_mempool_dump(stdout, mbuf_pool_control_tx);
     printf("data_packet_count=%zd, control_packet_count=%zd, total packet count=%zd\n",
            data_packet_count, control_packet_count, total_packet_count);
 
