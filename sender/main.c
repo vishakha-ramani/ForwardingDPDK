@@ -185,9 +185,29 @@ receive_thread(void *param) {
     uint16_t nb_rx;
 
     printf("\nCore %u receiving data packets.\n", rte_lcore_id());
-
+    now = rte_rdtsc_precise();
     while (sending || final_wait > 0) {
         nb_rx = rte_eth_rx_burst(port_id_data, 0, bufs, data_receive_burst_size);
+        
+        for (i = 0; i < nb_rx; i++) {
+            header = rte_pktmbuf_mtod(bufs[i], data_pkt_t * );
+            if (likely(bufs[i]->data_len >= DATA_PKT_SIZE && header->common_header.ether.ether_type == ETHER_TYPE_DATA)) {
+                seq = header->common_header.seq;
+                if (likely(seq < (total_packet_count))) {
+                    stat = results + seq;
+                    if (unlikely(stat->is_control)) {
+                        receive_error_type++;
+                    } else if (likely(!stat->data.time_receive)) {
+                        
+                        receive_data++;
+                    } else {
+                        receive_redundant++;
+                    }
+                } else {
+                    receive_error_seq++;
+                }
+            }
+    }
         // no need to do anything here, everything done in the data_rx_callback
         if (likely(nb_rx))
             rte_pktmbuf_free_bulk(bufs, nb_rx);
